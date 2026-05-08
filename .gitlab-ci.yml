@@ -15,6 +15,37 @@ default:
     - export PIP_CACHE_DIR="$CI_PROJECT_DIR/.cache/pip"
     - pip install --upgrade pip
 
+verify-oidc:
+  stage: test
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: https://iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_WIF_POOL}/providers/${GCP_WIF_PROVIDER}
+  script:
+    - apt-get update && apt-get install -y --no-install-recommends curl jq ca-certificates
+    - echo "$GITLAB_OIDC_TOKEN" > /tmp/gitlab.jwt
+    - 'echo "=== JWT payload ==="; awk -F. ''{print $2}'' /tmp/gitlab.jwt | tr "_-" "/+" | base64 -d 2>/dev/null | jq . || echo "(failed to decode)"'
+    - |
+      echo "=== STS token exchange response ==="
+      AUD="//iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_WIF_POOL}/providers/${GCP_WIF_PROVIDER}"
+      echo "audience: ${AUD}"
+      RESP=$(curl -sS -w "\n---HTTP_STATUS:%{http_code}---\n" -X POST https://sts.googleapis.com/v1/token \
+        -H "Content-Type: application/json" \
+        -d "{\"audience\":\"${AUD}\",\"grantType\":\"urn:ietf:params:oauth:grant-type:token-exchange\",\"requestedTokenType\":\"urn:ietf:params:oauth:token-type:access_token\",\"scope\":\"https://www.googleapis.com/auth/cloud-platform\",\"subjectTokenType\":\"urn:ietf:params:oauth:token-type:jwt\",\"subjectToken\":\"$(cat /tmp/gitlab.jwt)\"}")
+      echo "$RESP"
+      FEDERATED=$(echo "$RESP" | sed -n '1,/---HTTP_STATUS/p' | head -n -1 | jq -r '.access_token // empty')
+      if [ -z "$FEDERATED" ]; then echo "❌ no access_token returned"; exit 1; fi
+      echo "✅ got federated access token (${#FEDERATED} chars)"
+    - |
+      echo "=== Mint Google ID token (aud=pypi) ==="
+      ID_RESP=$(curl -sS -w "\n---HTTP_STATUS:%{http_code}---\n" -X POST \
+        "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${GCP_SERVICE_ACCOUNT}:generateIdToken" \
+        -H "Authorization: Bearer ${FEDERATED}" \
+        -H "Content-Type: application/json" \
+        -d '{"audience":"pypi","includeEmail":true}')
+      echo "$ID_RESP"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "ci-test"
+
 unit-tests:
   stage: test
   script:
