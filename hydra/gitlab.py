@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import requests
 
+from hydra.errors import raise_for_response
 from hydra.utils import create_slug
-
-
-class GitLabError(Exception):
-    pass
 
 
 @dataclass
@@ -18,8 +15,17 @@ class CreatedRepo:
     project_id: int
 
 
+@dataclass
+class GroupResolution:
+    """Result of resolving / creating a nested group path."""
+
+    group_id: Optional[int]
+    created_paths: list[str] = field(default_factory=list)
+
+
 def create_repo(
     *,
+    host: str,
     base_url: str,
     token: str,
     name: str,
@@ -37,27 +43,33 @@ def create_repo(
         data["namespace_id"] = namespace_id
 
     response = requests.post(f"{base_url}/api/v4/projects", headers=headers, data=data)
-    if response.status_code != 201:
-        raise GitLabError(
-            f"Failed to create repo {name} on {base_url}: "
-            f"{response.status_code} {response.text}"
-        )
+    raise_for_response(
+        response, host=host, action=f"creating repo '{name}'", host_url=base_url
+    )
     payload = response.json()
     return CreatedRepo(http_url=payload["http_url_to_repo"], project_id=payload["id"])
 
 
 def get_or_create_group_path(
     *,
+    host: str,
     base_url: str,
     token: str,
     group_path: Optional[str],
     add_timestamp: bool = False,
-) -> Optional[int]:
+) -> GroupResolution:
+    """Walk a slash-separated group path, creating any segments that don't exist.
+
+    Returns a GroupResolution with the leaf group id and a list of full paths
+    that were created (so the caller can report orphans on later failure).
+    """
     if not group_path:
-        return None
+        return GroupResolution(group_id=None)
 
     headers = {"PRIVATE-TOKEN": token}
     parent_id: Optional[int] = None
+    full_path_parts: list[str] = []
+    created_paths: list[str] = []
 
     for component in group_path.split("/"):
         if not component:
@@ -66,17 +78,21 @@ def get_or_create_group_path(
         slug = create_slug(component, add_timestamp)
 
         search_resp = requests.get(
-            f"{base_url}/api/v4/groups", headers=headers, params={"search": component}
+            f"{base_url}/api/v4/groups",
+            headers=headers,
+            params={"search": component, "per_page": 100},
         )
-        if search_resp.status_code != 200:
-            raise GitLabError(
-                f"Failed to search groups for {component}: "
-                f"{search_resp.status_code} {search_resp.text}"
-            )
+        raise_for_response(
+            search_resp,
+            host=host,
+            action=f"searching for group '{component}'",
+            host_url=base_url,
+        )
 
         existing_id = _find_group(search_resp.json(), component, parent_id)
         if existing_id is not None:
             parent_id = existing_id
+            full_path_parts.append(component)
             continue
 
         data = {"name": component, "path": slug}
@@ -86,14 +102,17 @@ def get_or_create_group_path(
         create_resp = requests.post(
             f"{base_url}/api/v4/groups", headers=headers, data=data
         )
-        if create_resp.status_code != 201:
-            raise GitLabError(
-                f"Failed to create group {slug}: "
-                f"{create_resp.status_code} {create_resp.text}"
-            )
+        raise_for_response(
+            create_resp,
+            host=host,
+            action=f"creating group '{slug}'",
+            host_url=base_url,
+        )
         parent_id = create_resp.json()["id"]
+        full_path_parts.append(slug)
+        created_paths.append("/".join(full_path_parts))
 
-    return parent_id
+    return GroupResolution(group_id=parent_id, created_paths=created_paths)
 
 
 def _find_group(

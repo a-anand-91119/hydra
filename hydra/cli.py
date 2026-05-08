@@ -4,24 +4,22 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from rich.console import Console
 
 from hydra import __version__
-from hydra.config import (
-    Config,
-    ConfigError,
-    Defaults,
-    GitHubConfig,
-    GitLabCloudConfig,
-    HostConfig,
-    load_config,
-    load_config_or_default,
-    resolve_config_path,
-    save_config,
-)
 from hydra import gitlab as gitlab_api
 from hydra import github as github_api
 from hydra import mirrors as mirrors_api
 from hydra import secrets as secrets_mod
+from hydra.config import Config, ConfigError, load_config, resolve_config_path
+from hydra.errors import HydraAPIError
+from hydra.wizard import (
+    CreateOptions,
+    WizardCancelled,
+    apply_token_storage,
+    run_create_wizard,
+    run_wizard,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -44,25 +42,29 @@ def _root(
     pass
 
 
-def _load_or_die(config_path: Optional[Path]) -> Config:
+def _load_or_die(config_path: Optional[Path], console: Console) -> Config:
     try:
         return load_config(config_path)
     except ConfigError as e:
-        typer.secho(str(e), fg=typer.colors.RED, err=True)
+        console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=1)
 
 
-def _resolve_token_or_die(service: str, *, allow_prompt: bool) -> str:
+def _resolve_token_or_die(
+    service: str, *, allow_prompt: bool, console: Console
+) -> str:
     try:
         return secrets_mod.get_token(service, allow_prompt=allow_prompt)
     except secrets_mod.SecretError as e:
-        typer.secho(str(e), fg=typer.colors.RED, err=True)
+        console.print(f"[red]{e}[/red]")
         raise typer.Exit(code=1)
 
 
 @app.command()
 def create(
-    name: str = typer.Argument(..., help="Repository name"),
+    name: Optional[str] = typer.Argument(
+        None, help="Repository name. Omit to launch the interactive wizard."
+    ),
     description: str = typer.Option("", "--description", "-d"),
     group: Optional[str] = typer.Option(
         None, "--group", "-g", help="Group path on self-hosted GitLab"
@@ -83,78 +85,135 @@ def create(
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Create a repo on self-hosted GitLab, GitLab.com, and GitHub."""
-    cfg = _load_or_die(config_path)
-    is_private = False if public else cfg.defaults.private
-    effective_group = group if group is not None else cfg.defaults.group
-    effective_github_org = github_org if github_org is not None else cfg.github.org
+    console = Console()
+    cfg = _load_or_die(config_path, console)
 
-    if dry_run:
-        typer.echo(f"[dry-run] would create '{name}' on:")
-        typer.echo(f"  - self-hosted: {cfg.self_hosted_gitlab.url} (group={effective_group or 'none'})")
-        typer.echo(f"  - gitlab.com:  {cfg.gitlab.url} (group={cfg.gitlab.managed_group_prefix}/{effective_group or ''})")
-        org_label = effective_github_org or "<user>"
-        typer.echo(f"  - github:      {cfg.github.url} (owner={org_label})")
-        typer.echo(f"  visibility: {'private' if is_private else 'public'}")
-        typer.echo(f"  mirror: {'no' if no_mirror else 'yes'}")
+    if name is None:
+        try:
+            opts = run_create_wizard(cfg=cfg, console=console)
+        except WizardCancelled as e:
+            console.print(f"\n[yellow]Cancelled:[/yellow] {e or 'aborted'}")
+            raise typer.Exit(code=1)
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Cancelled:[/yellow] aborted")
+            raise typer.Exit(code=1)
+        if dry_run:
+            opts.dry_run = True
+    else:
+        opts = CreateOptions(
+            name=name,
+            description=description,
+            group=group if group is not None else cfg.defaults.group,
+            is_private=False if public else cfg.defaults.private,
+            github_org=github_org if github_org is not None else cfg.github.org,
+            mirror=not no_mirror,
+            dry_run=dry_run,
+        )
+
+    if opts.dry_run:
+        _print_dry_run(cfg, opts)
         return
 
-    sh_token = _resolve_token_or_die("self_hosted_gitlab", allow_prompt=True)
-    gl_token = _resolve_token_or_die("gitlab", allow_prompt=True)
-    gh_token = _resolve_token_or_die("github", allow_prompt=True)
+    _execute_create(cfg=cfg, opts=opts, verbose=verbose, console=console)
+
+
+def _print_dry_run(cfg: Config, opts: CreateOptions) -> None:
+    typer.echo(f"[dry-run] would create '{opts.name}' on:")
+    typer.echo(
+        f"  - self-hosted: {cfg.self_hosted_gitlab.url} "
+        f"(group={opts.group or 'none'})"
+    )
+    typer.echo(
+        f"  - gitlab.com:  {cfg.gitlab.url} "
+        f"(group={cfg.gitlab.managed_group_prefix}/{opts.group or ''})"
+    )
+    org_label = opts.github_org or "<user>"
+    typer.echo(f"  - github:      {cfg.github.url} (owner={org_label})")
+    typer.echo(f"  visibility: {'private' if opts.is_private else 'public'}")
+    typer.echo(f"  mirror: {'yes' if opts.mirror else 'no'}")
+
+
+def _execute_create(
+    *, cfg: Config, opts: CreateOptions, verbose: bool, console: Console
+) -> None:
+    sh_token = _resolve_token_or_die(
+        "self_hosted_gitlab", allow_prompt=True, console=console
+    )
+    gl_token = _resolve_token_or_die("gitlab", allow_prompt=True, console=console)
+    gh_token = _resolve_token_or_die("github", allow_prompt=True, console=console)
+
+    created: list[tuple[str, str]] = []
 
     try:
-        sh_group_id = gitlab_api.get_or_create_group_path(
+        sh_groups = gitlab_api.get_or_create_group_path(
+            host="self_hosted_gitlab",
             base_url=cfg.self_hosted_gitlab.url,
             token=sh_token,
-            group_path=effective_group,
+            group_path=opts.group or None,
             add_timestamp=False,
         )
+        for path in sh_groups.created_paths:
+            created.append(
+                ("self-hosted GitLab group", f"{cfg.self_hosted_gitlab.url}/{path}")
+            )
+
         gl_group_path = (
-            f"{cfg.gitlab.managed_group_prefix}/{effective_group}"
-            if effective_group
+            f"{cfg.gitlab.managed_group_prefix}/{opts.group}"
+            if opts.group
             else cfg.gitlab.managed_group_prefix
         )
-        gl_group_id = gitlab_api.get_or_create_group_path(
+        gl_groups = gitlab_api.get_or_create_group_path(
+            host="gitlab",
             base_url=cfg.gitlab.url,
             token=gl_token,
             group_path=gl_group_path,
             add_timestamp=True,
         )
+        for path in gl_groups.created_paths:
+            created.append(("gitlab.com group", f"{cfg.gitlab.url}/{path}"))
 
         if verbose:
-            typer.echo(f"self-hosted group id: {sh_group_id}, gitlab.com group id: {gl_group_id}")
+            console.print(
+                f"[dim]self-hosted group id: {sh_groups.group_id}, "
+                f"gitlab.com group id: {gl_groups.group_id}[/dim]"
+            )
 
         sh_repo = gitlab_api.create_repo(
+            host="self_hosted_gitlab",
             base_url=cfg.self_hosted_gitlab.url,
             token=sh_token,
-            name=name,
-            description=description,
-            namespace_id=sh_group_id,
-            is_private=is_private,
+            name=opts.name,
+            description=opts.description,
+            namespace_id=sh_groups.group_id,
+            is_private=opts.is_private,
         )
-        typer.secho(f"✓ self-hosted: {sh_repo.http_url}", fg=typer.colors.GREEN)
+        created.append(("self-hosted GitLab repo", sh_repo.http_url))
+        console.print(f"[green]✓[/green] self-hosted: {sh_repo.http_url}")
 
         gl_repo = gitlab_api.create_repo(
+            host="gitlab",
             base_url=cfg.gitlab.url,
             token=gl_token,
-            name=name,
-            description=description,
-            namespace_id=gl_group_id,
-            is_private=is_private,
+            name=opts.name,
+            description=opts.description,
+            namespace_id=gl_groups.group_id,
+            is_private=opts.is_private,
         )
-        typer.secho(f"✓ gitlab.com:  {gl_repo.http_url}", fg=typer.colors.GREEN)
+        created.append(("gitlab.com repo", gl_repo.http_url))
+        console.print(f"[green]✓[/green] gitlab.com:  {gl_repo.http_url}")
 
         gh_url = github_api.create_repo(
             base_url=cfg.github.url,
             token=gh_token,
-            name=name,
-            description=description,
-            org=effective_github_org,
-            is_private=is_private,
+            name=opts.name,
+            description=opts.description,
+            org=opts.github_org,
+            is_private=opts.is_private,
         )
-        typer.secho(f"✓ github:      {gh_url}", fg=typer.colors.GREEN)
+        created.append(("github repo", gh_url))
+        console.print(f"[green]✓[/green] github:      {gh_url}")
 
-        if not no_mirror:
+        if opts.mirror:
             mirrors_api.setup_mirrors(
                 base_url=cfg.self_hosted_gitlab.url,
                 self_hosted_token=sh_token,
@@ -164,77 +223,60 @@ def create(
                 gitlab_repo_url=gl_repo.http_url,
                 gitlab_token=gl_token,
             )
-            typer.secho("✓ mirrors configured", fg=typer.colors.GREEN)
+            console.print("[green]✓[/green] mirrors configured")
 
-    except (gitlab_api.GitLabError, github_api.GitHubError, mirrors_api.MirrorError) as e:
-        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+    except HydraAPIError as e:
+        _render_api_error(console, e, created)
         raise typer.Exit(code=1)
+
+
+def _render_api_error(
+    console: Console, err: HydraAPIError, created: list[tuple[str, str]]
+) -> None:
+    """Pretty-print a HydraAPIError with hint and partial-progress info."""
+    console.print()
+    console.print(f"[bold red]✗[/bold red] [bold]{err.message}[/bold]")
+
+    if err.hint:
+        console.print()
+        for line in err.hint.split("\n"):
+            console.print(f"  [dim]{line}[/dim]")
+
+    if created:
+        console.print()
+        console.print("[yellow]⚠ Partial progress before the failure:[/yellow]")
+        for label, url in created:
+            console.print(f"  • [bold]{label}[/bold]: {url}")
+        console.print()
+        console.print(
+            "  [dim]These resources exist now. Delete them manually before retrying, "
+            "or use a different repo name.[/dim]"
+        )
+    console.print()
 
 
 @app.command()
 def configure(
     config_path: Optional[Path] = typer.Option(None, "--config"),
-    store: str = typer.Option(
-        "keyring",
-        "--store",
-        help="Where to store tokens: 'keyring' or 'env' (prints export lines)",
-    ),
 ) -> None:
-    """Interactively set up config and tokens."""
-    if store not in ("keyring", "env"):
-        typer.secho("--store must be 'keyring' or 'env'", fg=typer.colors.RED, err=True)
+    """Guided wizard for hosts, defaults, and API tokens."""
+    console = Console()
+
+    try:
+        result = run_wizard(config_path=config_path, console=console)
+    except WizardCancelled as e:
+        console.print(f"\n[yellow]Configuration not saved:[/yellow] {e or 'aborted'}")
+        raise typer.Exit(code=1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Configuration not saved:[/yellow] aborted")
         raise typer.Exit(code=1)
 
-    existing = load_config_or_default(config_path)
-
-    typer.echo("Configuring hydra. Press Enter to keep existing values.\n")
-
-    sh_url = typer.prompt(
-        "Self-hosted GitLab URL",
-        default=existing.self_hosted_gitlab.url or "https://gitlab.example.com",
+    console.print(f"\n[green]✓[/green] Config saved to [bold]{result.config_path}[/bold]")
+    apply_token_storage(result, console=console)
+    console.print(
+        "\n[dim]Next:[/dim] try [bold]hydra create my-repo --dry-run[/bold] "
+        "to verify the setup."
     )
-    gl_url = typer.prompt("GitLab.com URL", default=existing.gitlab.url)
-    gl_prefix = typer.prompt(
-        "GitLab.com managed group prefix", default=existing.gitlab.managed_group_prefix
-    )
-    gh_url = typer.prompt("GitHub API URL", default=existing.github.url)
-    gh_org = typer.prompt(
-        "GitHub org (blank for user account)", default=existing.github.org or "", show_default=False
-    )
-    default_group = typer.prompt(
-        "Default group path (blank for none)", default=existing.defaults.group, show_default=False
-    )
-    default_private = typer.confirm(
-        "Default to private repos?", default=existing.defaults.private
-    )
-
-    cfg = Config(
-        self_hosted_gitlab=HostConfig(url=sh_url),
-        gitlab=GitLabCloudConfig(url=gl_url, managed_group_prefix=gl_prefix),
-        github=GitHubConfig(url=gh_url, org=gh_org or None),
-        defaults=Defaults(private=default_private, group=default_group),
-    )
-    saved_path = save_config(cfg, config_path)
-    typer.secho(f"✓ Wrote config to {saved_path}", fg=typer.colors.GREEN)
-
-    typer.echo("\nNow let's collect API tokens (input is hidden).")
-    tokens = {}
-    for service in secrets_mod.SERVICES:
-        token = typer.prompt(f"  {service} token (blank to skip)", default="", hide_input=True, show_default=False)
-        if token:
-            tokens[service] = token
-
-    if not tokens:
-        typer.echo("No tokens entered.")
-        return
-
-    if store == "keyring":
-        for service, token in tokens.items():
-            secrets_mod.set_token(service, token)
-            typer.secho(f"✓ stored {service} in keyring", fg=typer.colors.GREEN)
-    else:
-        typer.echo("\nAdd these to your shell or .env:")
-        typer.echo(secrets_mod.export_lines(tokens))
 
 
 @app.command()
@@ -246,8 +288,11 @@ def status(
     config_path: Optional[Path] = typer.Option(None, "--config"),
 ) -> None:
     """Show mirror status for a repo on the self-hosted GitLab."""
-    cfg = _load_or_die(config_path)
-    sh_token = _resolve_token_or_die("self_hosted_gitlab", allow_prompt=True)
+    console = Console()
+    cfg = _load_or_die(config_path, console)
+    sh_token = _resolve_token_or_die(
+        "self_hosted_gitlab", allow_prompt=True, console=console
+    )
 
     effective_group = group if group is not None else cfg.defaults.group
     repo_path = f"{effective_group}/{name}" if effective_group else name
@@ -257,31 +302,33 @@ def status(
             base_url=cfg.self_hosted_gitlab.url, token=sh_token, repo_path=repo_path
         )
         if project_id is None:
-            typer.secho(f"Project not found: {repo_path}", fg=typer.colors.RED, err=True)
+            console.print(f"[red]Project not found:[/red] {repo_path}")
             raise typer.Exit(code=1)
 
         mirror_list = mirrors_api.list_mirrors(
-            base_url=cfg.self_hosted_gitlab.url, token=sh_token, project_id=project_id
+            base_url=cfg.self_hosted_gitlab.url,
+            token=sh_token,
+            project_id=project_id,
         )
-    except mirrors_api.MirrorError as e:
-        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
+    except HydraAPIError as e:
+        _render_api_error(console, e, created=[])
         raise typer.Exit(code=1)
 
     if not mirror_list:
-        typer.echo(f"No mirrors configured for {repo_path}.")
+        console.print(f"No mirrors configured for {repo_path}.")
         return
 
-    typer.echo(f"Mirrors for {repo_path} (project {project_id}):")
+    console.print(f"Mirrors for [bold]{repo_path}[/bold] (project {project_id}):")
     for m in mirror_list:
-        flag = "enabled " if m.enabled else "disabled"
+        flag = "[green]enabled [/green]" if m.enabled else "[yellow]disabled[/yellow]"
         line = f"  [{flag}] {m.url}"
         if m.last_update_status:
             line += f" — {m.last_update_status}"
         if m.last_update_at:
             line += f" @ {m.last_update_at}"
-        typer.echo(line)
+        console.print(line)
         if m.last_error:
-            typer.secho(f"    error: {m.last_error}", fg=typer.colors.RED)
+            console.print(f"    [red]error: {m.last_error}[/red]")
 
 
 @app.command("config-path")

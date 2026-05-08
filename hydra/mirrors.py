@@ -2,13 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlunparse
 
 import requests
 
-
-class MirrorError(Exception):
-    pass
+from hydra.errors import HydraAPIError, raise_for_response
 
 
 @dataclass
@@ -22,7 +20,11 @@ class Mirror:
 
 def _inject_credentials(repo_url: str, username: str, token: str) -> str:
     parsed = urlparse(repo_url)
-    netloc = f"{username}:{token}@{parsed.hostname}"
+    if not parsed.hostname:
+        raise ValueError(f"Cannot inject credentials into URL without host: {repo_url!r}")
+    encoded_user = quote(username, safe="")
+    encoded_token = quote(token, safe="")
+    netloc = f"{encoded_user}:{encoded_token}@{parsed.hostname}"
     if parsed.port:
         netloc += f":{parsed.port}"
     return urlunparse(parsed._replace(netloc=netloc))
@@ -34,6 +36,7 @@ def _add_mirror(
     token: str,
     project_id: int,
     mirror_url: str,
+    target_label: str,
 ) -> dict:
     headers = {"PRIVATE-TOKEN": token}
     data = {"url": mirror_url, "enabled": True, "only_protected_branches": False}
@@ -42,10 +45,12 @@ def _add_mirror(
         headers=headers,
         data=data,
     )
-    if response.status_code not in (200, 201):
-        raise MirrorError(
-            f"Failed to add mirror: {response.status_code} {response.text}"
-        )
+    raise_for_response(
+        response,
+        host="self_hosted_gitlab",
+        action=f"adding {target_label} mirror to project {project_id}",
+        host_url=base_url,
+    )
     return response.json()
 
 
@@ -68,12 +73,14 @@ def setup_mirrors(
             token=self_hosted_token,
             project_id=project_id,
             mirror_url=github_mirror_url,
+            target_label="GitHub",
         ),
         _add_mirror(
             base_url=base_url,
             token=self_hosted_token,
             project_id=project_id,
             mirror_url=gitlab_mirror_url,
+            target_label="GitLab.com",
         ),
     ]
 
@@ -85,10 +92,12 @@ def list_mirrors(
     response = requests.get(
         f"{base_url}/api/v4/projects/{project_id}/remote_mirrors", headers=headers
     )
-    if response.status_code != 200:
-        raise MirrorError(
-            f"Failed to list mirrors: {response.status_code} {response.text}"
-        )
+    raise_for_response(
+        response,
+        host="self_hosted_gitlab",
+        action=f"listing mirrors for project {project_id}",
+        host_url=base_url,
+    )
     return [
         Mirror(
             url=m.get("url", ""),
@@ -105,17 +114,16 @@ def find_project_id(
     *, base_url: str, token: str, repo_path: str
 ) -> Optional[int]:
     headers = {"PRIVATE-TOKEN": token}
-    from urllib.parse import quote
-
     encoded = quote(repo_path, safe="")
-    response = requests.get(
-        f"{base_url}/api/v4/projects/{encoded}", headers=headers
-    )
+    response = requests.get(f"{base_url}/api/v4/projects/{encoded}", headers=headers)
     if response.status_code == 200:
         return response.json().get("id")
     if response.status_code == 404:
         return None
-    raise MirrorError(
-        f"Failed to look up project {repo_path}: "
-        f"{response.status_code} {response.text}"
+    raise_for_response(
+        response,
+        host="self_hosted_gitlab",
+        action=f"looking up project '{repo_path}'",
+        host_url=base_url,
     )
+    return None  # unreachable; raise_for_response always raises on non-2xx

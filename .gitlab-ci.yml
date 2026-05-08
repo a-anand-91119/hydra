@@ -1,0 +1,106 @@
+stages:
+  - test
+  - build
+  - publish
+
+default:
+  image: python:3.11-slim
+  cache:
+    key:
+      files:
+        - pyproject.toml
+    paths:
+      - .cache/pip
+  before_script:
+    - export PIP_CACHE_DIR="$CI_PROJECT_DIR/.cache/pip"
+    - pip install --upgrade pip
+
+unit-tests:
+  stage: test
+  script:
+    - pip install -e '.[dev]'
+    - pytest --cov=hydra --cov-report=term-missing
+  rules:
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+smoke:
+  stage: test
+  needs: ["unit-tests"]
+  script:
+    - pip install -e .
+    - python -c "from hydra.cli import app; print('import ok')"
+    - hydra --help
+    - hydra --version
+  rules:
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+build:
+  stage: build
+  script:
+    - pip install build
+    - python -m build
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
+
+publish:
+  stage: publish
+  needs: ["build"]
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: https://iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_WIF_POOL}/providers/${GCP_WIF_PROVIDER}
+  variables:
+    GCP_SERVICE_ACCOUNT: $GCP_SERVICE_ACCOUNT
+    GCP_PROJECT_NUMBER: $GCP_PROJECT_NUMBER
+    GCP_WIF_POOL: $GCP_WIF_POOL
+    GCP_WIF_PROVIDER: $GCP_WIF_PROVIDER
+  script:
+    - apt-get update && apt-get install -y --no-install-recommends curl jq ca-certificates
+    - pip install twine
+
+    # 1. Save GitLab's OIDC JWT
+    - echo "$GITLAB_OIDC_TOKEN" > /tmp/gitlab.jwt
+
+    # 2. Exchange GitLab JWT -> GCP federated access token (STS)
+    - |
+      AUDIENCE="//iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_WIF_POOL}/providers/${GCP_WIF_PROVIDER}"
+      FEDERATED_TOKEN=$(curl -sS -X POST https://sts.googleapis.com/v1/token \
+        -H "Content-Type: application/json" \
+        -d "{
+          \"audience\": \"${AUDIENCE}\",
+          \"grantType\": \"urn:ietf:params:oauth:grant-type:token-exchange\",
+          \"requestedTokenType\": \"urn:ietf:params:oauth:token-type:access_token\",
+          \"scope\": \"https://www.googleapis.com/auth/cloud-platform\",
+          \"subjectTokenType\": \"urn:ietf:params:oauth:token-type:jwt\",
+          \"subjectToken\": \"$(cat /tmp/gitlab.jwt)\"
+        }" | jq -r '.access_token')
+      test -n "$FEDERATED_TOKEN" && test "$FEDERATED_TOKEN" != "null"
+
+    # 3. Use federated token to mint a Google ID token (aud=pypi) for the service account
+    - |
+      GOOGLE_ID_TOKEN=$(curl -sS -X POST \
+        "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${GCP_SERVICE_ACCOUNT}:generateIdToken" \
+        -H "Authorization: Bearer ${FEDERATED_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d '{"audience":"pypi","includeEmail":true}' | jq -r '.token')
+      test -n "$GOOGLE_ID_TOKEN" && test "$GOOGLE_ID_TOKEN" != "null"
+
+    # 4. Exchange Google ID token for a short-lived PyPI API token
+    - |
+      PYPI_TOKEN=$(curl -sS -X POST https://pypi.org/_/oidc/mint-token \
+        -H "Content-Type: application/json" \
+        -d "{\"token\":\"${GOOGLE_ID_TOKEN}\"}" | jq -r '.token')
+      test -n "$PYPI_TOKEN" && test "$PYPI_TOKEN" != "null"
+      echo "PYPI_TOKEN=${PYPI_TOKEN}" > /tmp/pypi.env
+
+    # 5. Publish
+    - . /tmp/pypi.env
+    - twine check dist/*
+    - twine upload --non-interactive -u __token__ -p "$PYPI_TOKEN" dist/*
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/

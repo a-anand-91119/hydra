@@ -5,9 +5,7 @@ from typing import Optional
 
 import requests
 
-
-class GitHubError(Exception):
-    pass
+from hydra.errors import raise_for_response
 
 
 def create_repo(
@@ -27,13 +25,11 @@ def create_repo(
 
     if org:
         url = f"{base_url}/orgs/{org}/repos"
+        action = f"creating repo '{name}' under org '{org}'"
     else:
         url = f"{base_url}/user/repos"
+        action = f"creating repo '{name}' under user account"
 
     response = requests.post(url, headers=headers, data=body)
-    if response.status_code != 201:
-        raise GitHubError(
-            f"Failed to create repo {name} on GitHub: "
-            f"{response.status_code} {response.text}"
-        )
+    raise_for_response(response, host="github", action=action, host_url=base_url)
     return response.json()["clone_url"]
