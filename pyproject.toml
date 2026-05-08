@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hydra-repo-syncer"
+version = "0.1.0"
+description = "Provision a repo across self-hosted GitLab, GitLab.com, and GitHub with push mirroring."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "aanand" }]
+dependencies = [
+    "requests>=2.31",
+    "typer>=0.12",
+    "pyyaml>=6.0",
+    "keyring>=24.0",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+hydra = "hydra.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["hydra*"]
+exclude = ["tests*", "venv*"]

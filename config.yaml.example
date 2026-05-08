@@ -1,0 +1,14 @@
+self_hosted_gitlab:
+  url: https://gitlab.example.com
+
+gitlab:
+  url: https://gitlab.com
+  managed_group_prefix: repo-syncer-managed-groups
+
+github:
+  url: https://api.github.com
+  org: null    # null = create under user, or set an org name
+
+defaults:
+  private: true
+  group: ""    # optional default group path on the self-hosted GitLab
