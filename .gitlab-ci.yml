@@ -15,6 +15,25 @@ default:
     - export PIP_CACHE_DIR="$CI_PROJECT_DIR/.cache/pip"
     - pip install --upgrade pip
 
+verify-oidc:
+  stage: test
+  id_tokens:
+    GITLAB_OIDC_TOKEN:
+      aud: https://iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_WIF_POOL}/providers/${GCP_WIF_PROVIDER}
+  script:
+    - apt-get update && apt-get install -y --no-install-recommends curl jq ca-certificates
+    - echo "$GITLAB_OIDC_TOKEN" > /tmp/gitlab.jwt
+    - 'echo "=== JWT header ==="; awk -F. ''{print $1}'' /tmp/gitlab.jwt | tr "_-" "/+" | base64 -d 2>/dev/null; echo'
+    - 'echo "=== JWT payload ==="; awk -F. ''{print $2}'' /tmp/gitlab.jwt | tr "_-" "/+" | base64 -d 2>/dev/null | jq . || echo "(decode failed)"'
+    - |
+      echo "=== STS exchange ==="
+      AUD="//iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_WIF_POOL}/providers/${GCP_WIF_PROVIDER}"
+      curl -sS -w "\nHTTP %{http_code}\n" -X POST https://sts.googleapis.com/v1/token \
+        -H "Content-Type: application/json" \
+        -d "{\"audience\":\"${AUD}\",\"grantType\":\"urn:ietf:params:oauth:grant-type:token-exchange\",\"requestedTokenType\":\"urn:ietf:params:oauth:token-type:access_token\",\"scope\":\"https://www.googleapis.com/auth/cloud-platform\",\"subjectTokenType\":\"urn:ietf:params:oauth:token-type:jwt\",\"subjectToken\":\"$(cat /tmp/gitlab.jwt)\"}"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^vtest-/
+
 unit-tests:
   stage: test
   script:
