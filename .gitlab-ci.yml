@@ -73,12 +73,8 @@ publish:
   id_tokens:
     GITLAB_OIDC_TOKEN:
       aud: https://iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_WIF_POOL}/providers/${GCP_WIF_PROVIDER}
-  variables:
-    GCP_SERVICE_ACCOUNT: $GCP_SERVICE_ACCOUNT
-    GCP_PROJECT_NUMBER: $GCP_PROJECT_NUMBER
-    GCP_WIF_POOL: $GCP_WIF_POOL
-    GCP_WIF_PROVIDER: $GCP_WIF_PROVIDER
   script:
+    - 'echo "GCP_PROJECT_NUMBER=${GCP_PROJECT_NUMBER:-EMPTY} GCP_WIF_POOL=${GCP_WIF_POOL:-EMPTY} GCP_WIF_PROVIDER=${GCP_WIF_PROVIDER:-EMPTY} GCP_SERVICE_ACCOUNT=${GCP_SERVICE_ACCOUNT:-EMPTY}"'
     - apt-get update && apt-get install -y --no-install-recommends curl jq ca-certificates
     - pip install twine
 
