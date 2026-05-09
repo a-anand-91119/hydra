@@ -1,5 +1,7 @@
 # 🐉 Hydra
 
+![hydra-2.png](images/hydra-2.png)
+
 > **One source, many mirrors.** Provision a single repo on self-hosted GitLab, GitLab.com, and GitHub in one shot — with push mirroring wired up so every push fans out automatically.
 
 Hydra is a small Python CLI for teams who keep code on a **self-hosted GitLab** but also need it on **GitLab.com** and/or **GitHub** — for open-source releases, customer access, vendor integrations, or backup. You run one command and Hydra creates the project on all three hosts, then configures GitLab's built-in push mirrors so the self-hosted copy is the only place you ever push.
