@@ -1,6 +1,8 @@
 # 🐉 Hydra
 
-![hydra-2.png](images/hydra-2.png)
+<p align="center">
+  <img src="images/hydra-2.png" alt="Hydra" width="280">
+</p>
 
 > **One source, many mirrors.** Provision a single repo on self-hosted GitLab, GitLab.com, and GitHub in one shot — with push mirroring wired up so every push fans out automatically.
 
