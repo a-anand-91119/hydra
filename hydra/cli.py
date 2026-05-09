@@ -341,3 +341,4 @@ def show_config_path(
 
 if __name__ == "__main__":
     app()
+
