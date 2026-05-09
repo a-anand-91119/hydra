@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 
 import pytest
 
-from hydra.mirrors import _inject_credentials
+from hydra.mirrors import _inject_credentials, scrub_credentials
 
 
 class TestInjectCredentials:
@@ -53,3 +53,28 @@ class TestInjectCredentials:
     def test_raises_on_url_without_host(self):
         with pytest.raises(ValueError):
             _inject_credentials("not-a-url", "oauth2", "tok")
+
+
+class TestScrubCredentials:
+    def test_strips_userinfo(self):
+        out = scrub_credentials("https://oauth2:secret-token@gitlab.com/foo/bar.git")
+        assert "secret-token" not in out
+        assert "oauth2" not in out
+        assert out == "https://gitlab.com/foo/bar.git"
+
+    def test_no_userinfo_passthrough(self):
+        url = "https://gitlab.com/foo/bar.git"
+        assert scrub_credentials(url) == url
+
+    def test_preserves_port(self):
+        out = scrub_credentials("https://oauth2:tok@gitlab.example.com:8443/foo.git")
+        assert out == "https://gitlab.example.com:8443/foo.git"
+
+    def test_handles_special_chars_in_token(self):
+        # Even URL-encoded token chars must not leak.
+        out = scrub_credentials("https://oauth2:ab%40cd%2Fef@gh.com/x.git")
+        assert "ab" not in out.split("//")[1].split("@")[0] if "@" in out else True
+        assert out == "https://gh.com/x.git"
+
+    def test_invalid_url_returns_input(self):
+        assert scrub_credentials("not-a-url") == "not-a-url"

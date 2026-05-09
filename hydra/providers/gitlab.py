@@ -1,0 +1,153 @@
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from hydra import gitlab as gitlab_api
+from hydra import mirrors as mirrors_api
+from hydra.providers.base import (
+    Capabilities,
+    HostSpec,
+    MirrorInfo,
+    NamespaceRef,
+    RepoRef,
+)
+
+KIND = "gitlab"
+
+CAPABILITIES = Capabilities(
+    supports_mirror_source=True,
+    supports_group_paths=True,
+    supports_status_lookup=True,
+    inbound_mirror_username="oauth2",
+)
+
+
+class GitLabProvider:
+    def __init__(self, spec: HostSpec) -> None:
+        self.spec = spec
+        self.capabilities = CAPABILITIES
+
+    @property
+    def _add_timestamp(self) -> bool:
+        return bool(self.spec.options.get("add_timestamp", False))
+
+    @property
+    def _managed_prefix(self) -> Optional[str]:
+        v = self.spec.options.get("managed_group_prefix")
+        return v or None
+
+    def _effective_group_path(self, group_path: Optional[str]) -> Optional[str]:
+        prefix = self._managed_prefix
+        if not prefix:
+            return group_path or None
+        if group_path:
+            return f"{prefix}/{group_path}"
+        return prefix
+
+    def ensure_namespace(
+        self, *, group_path: Optional[str], token: str
+    ) -> NamespaceRef:
+        full = self._effective_group_path(group_path)
+        res = gitlab_api.get_or_create_group_path(
+            host=self.spec.id,
+            base_url=self.spec.url,
+            token=token,
+            group_path=full,
+            add_timestamp=self._add_timestamp,
+        )
+        return NamespaceRef(
+            namespace_id=res.group_id,
+            created_paths=list(res.created_paths),
+            full_path=full,
+        )
+
+    def create_repo(
+        self,
+        *,
+        token: str,
+        name: str,
+        description: str,
+        namespace: NamespaceRef,
+        is_private: bool,
+    ) -> RepoRef:
+        created = gitlab_api.create_repo(
+            host=self.spec.id,
+            base_url=self.spec.url,
+            token=token,
+            name=name,
+            description=description,
+            namespace_id=namespace.namespace_id,
+            is_private=is_private,
+        )
+        return RepoRef(
+            http_url=created.http_url,
+            project_id=created.project_id,
+            namespace_path=namespace.full_path,
+        )
+
+    def add_outbound_mirror(
+        self,
+        *,
+        token: str,
+        primary_repo: RepoRef,
+        target_url: str,
+        target_token: str,
+        target_username: str,
+        target_label: str,
+    ) -> Dict[str, Any]:
+        if primary_repo.project_id is None:
+            raise ValueError("GitLab mirror requires primary_repo.project_id")
+        mirror_url = mirrors_api.inject_credentials(
+            target_url, target_username, target_token
+        )
+        return mirrors_api.add_mirror(
+            host_id=self.spec.id,
+            base_url=self.spec.url,
+            token=token,
+            project_id=primary_repo.project_id,
+            mirror_url=mirror_url,
+            target_label=target_label,
+        )
+
+    def find_project(self, *, token: str, repo_path: str) -> Optional[RepoRef]:
+        pid = mirrors_api.find_project_id(
+            host_id=self.spec.id,
+            base_url=self.spec.url,
+            token=token,
+            repo_path=repo_path,
+        )
+        if pid is None:
+            return None
+        return RepoRef(http_url="", project_id=pid, namespace_path=None)
+
+    def list_mirrors(
+        self, *, token: str, primary_repo: RepoRef
+    ) -> List[MirrorInfo]:
+        if primary_repo.project_id is None:
+            return []
+        ms = mirrors_api.list_mirrors(
+            host_id=self.spec.id,
+            base_url=self.spec.url,
+            token=token,
+            project_id=primary_repo.project_id,
+        )
+        return [
+            MirrorInfo(
+                url=m.url,
+                enabled=m.enabled,
+                last_update_status=m.last_update_status,
+                last_update_at=m.last_update_at,
+                last_error=m.last_error,
+            )
+            for m in ms
+        ]
+
+
+def _factory(spec: HostSpec) -> GitLabProvider:
+    return GitLabProvider(spec)
+
+
+def install() -> None:
+    from hydra.providers import register
+
+    register(KIND, _factory, CAPABILITIES)

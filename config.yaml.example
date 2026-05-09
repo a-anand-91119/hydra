@@ -1,14 +1,50 @@
-self_hosted_gitlab:
-  url: https://gitlab.example.com
+# Hydra configuration: one primary (mirror source) + N forks (mirror destinations).
+#
+# `id` is a stable string you choose; it is used as the keyring/env-var key
+# for that host's API token. Token resolution order: keyring → env var
+# (HYDRA_TOKEN_<UPPER_ID>) → .env → interactive prompt.
+#
+# `kind` selects the provider implementation. Today: "gitlab" or "github".
+# Only providers whose capabilities include `supports_mirror_source` may be
+# used as `primary` (today: gitlab-family hosts only — GitHub does not support
+# outbound push mirrors).
 
-gitlab:
-  url: https://gitlab.com
-  managed_group_prefix: repo-syncer-managed-groups
+hosts:
+  - id: self_hosted_gitlab
+    kind: gitlab
+    url: https://gitlab.example.com
+    options:
+      add_timestamp: false        # don't append a timestamp to created group leaves
 
-github:
-  url: https://api.github.com
-  org: null    # null = create under user, or set an org name
+  - id: gitlab
+    kind: gitlab
+    url: https://gitlab.com
+    options:
+      managed_group_prefix: repo-syncer-managed-groups
+      add_timestamp: true         # gitlab.com leaves get a timestamp suffix
+
+  - id: github
+    kind: github
+    url: https://api.github.com
+    options:
+      org: null                   # null = create under user, or set an org name
+
+primary: self_hosted_gitlab        # source repo (must be mirror-capable)
+forks: [gitlab, github]            # mirror destinations
 
 defaults:
   private: true
-  group: ""    # optional default group path on the self-hosted GitLab
+  group: ""    # optional default group path on the primary host
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Legacy-shape configs (with top-level `self_hosted_gitlab`/`gitlab`/`github`
+# instead of `hosts:`) are auto-migrated on load. Run `hydra configure` to
+# rewrite the file in the new shape, or convert manually using this mapping:
+#
+#   legacy `self_hosted_gitlab.url`     → hosts[id=self_hosted_gitlab].url
+#   legacy `gitlab.url`                 → hosts[id=gitlab].url
+#   legacy `gitlab.managed_group_prefix`→ hosts[id=gitlab].options.managed_group_prefix
+#   legacy `github.url`                 → hosts[id=github].url
+#   legacy `github.org`                 → hosts[id=github].options.org
+#   (implicit) primary=self_hosted_gitlab, forks=[gitlab, github]
+# ─────────────────────────────────────────────────────────────────────────────

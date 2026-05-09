@@ -4,6 +4,12 @@ import json
 
 import pytest
 
+# Ensure built-in providers are registered before any test loads config or
+# instantiates a provider. Idempotent.
+from hydra import providers as _providers  # noqa: E402
+
+_providers.bootstrap()
+
 
 class FakeResponse:
     """Minimal stand-in for requests.Response used by error tests."""

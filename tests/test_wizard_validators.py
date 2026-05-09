@@ -1,8 +1,37 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
-from hydra.wizard import _looks_like_url, _required, _valid_repo_name
+from hydra.config import HostSpec
+from hydra.wizard import (
+    WizardCancelled,
+    _looks_like_url,
+    _pick_forks,
+    _required,
+    _valid_host_id,
+    _valid_repo_name,
+)
+
+
+class TestValidHostId:
+    def test_accepts_simple(self):
+        assert _valid_host_id("internal", taken=set()) is True
+
+    def test_accepts_hyphens_underscores(self):
+        assert _valid_host_id("my-host_1", taken=set()) is True
+
+    def test_rejects_empty(self):
+        assert _valid_host_id("", taken=set()) == "Required"
+
+    def test_rejects_special_chars(self):
+        result = _valid_host_id("ho.st", taken=set())
+        assert isinstance(result, str) and "letters" in result
+
+    def test_rejects_taken(self):
+        result = _valid_host_id("dup", taken={"dup"})
+        assert isinstance(result, str) and "already" in result
 
 
 class TestRequired:
@@ -91,3 +120,30 @@ class TestValidRepoName:
         result = _valid_repo_name(name)
         assert isinstance(result, str)
         assert "end" in result
+
+
+class TestPickForks:
+    def test_empty_pool_raises(self):
+        # Only the primary host exists — no candidates for forks.
+        hosts = [HostSpec(id="only", kind="gitlab", url="https://gl.x")]
+        with pytest.raises(WizardCancelled, match="another host"):
+            _pick_forks(hosts, primary="only", default=[])
+
+    def test_persistent_empty_selection_raises(self, capsys):
+        hosts = [
+            HostSpec(id="primary", kind="gitlab", url="https://gl.x"),
+            HostSpec(id="fork", kind="gitlab", url="https://gl.y"),
+        ]
+        # _ask returns [] every time → eventual WizardCancelled (no infinite loop).
+        with patch("hydra.wizard._ask", return_value=[]):
+            with pytest.raises(WizardCancelled, match="multiple attempts"):
+                _pick_forks(hosts, primary="primary", default=[], max_attempts=2)
+
+    def test_first_nonempty_selection_returns(self):
+        hosts = [
+            HostSpec(id="primary", kind="gitlab", url="https://gl.x"),
+            HostSpec(id="a", kind="gitlab", url="https://gl.a"),
+            HostSpec(id="b", kind="github", url="https://api.github.com"),
+        ]
+        with patch("hydra.wizard._ask", return_value=["a", "b"]):
+            assert _pick_forks(hosts, primary="primary", default=[]) == ["a", "b"]

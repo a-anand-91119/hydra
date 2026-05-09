@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse, urlunparse
 
 import requests
@@ -12,12 +13,13 @@ from hydra.errors import raise_for_response
 class Mirror:
     url: str
     enabled: bool
-    last_update_status: str | None
-    last_update_at: str | None
-    last_error: str | None
+    last_update_status: Optional[str]
+    last_update_at: Optional[str]
+    last_error: Optional[str]
 
 
-def _inject_credentials(repo_url: str, username: str, token: str) -> str:
+def inject_credentials(repo_url: str, username: str, token: str) -> str:
+    """Inject `username:token` userinfo into a repo URL for push-mirror auth."""
     parsed = urlparse(repo_url)
     if not parsed.hostname:
         raise ValueError(f"Cannot inject credentials into URL without host: {repo_url!r}")
@@ -29,14 +31,36 @@ def _inject_credentials(repo_url: str, username: str, token: str) -> str:
     return urlunparse(parsed._replace(netloc=netloc))
 
 
-def _add_mirror(
+def scrub_credentials(url: str) -> str:
+    """Strip userinfo (`user:pass@`) from a URL for safe display/logging.
+
+    Returns the input unchanged if it doesn't parse as a URL.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return url
+    if not parsed.hostname:
+        return url
+    netloc = parsed.hostname
+    if parsed.port:
+        netloc += f":{parsed.port}"
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
+# Backward-compat private alias (kept for any direct test imports).
+_inject_credentials = inject_credentials
+
+
+def add_mirror(
     *,
+    host_id: str,
     base_url: str,
     token: str,
     project_id: int,
     mirror_url: str,
     target_label: str,
-) -> dict:
+) -> Dict[str, Any]:
     headers = {"PRIVATE-TOKEN": token}
     data = {"url": mirror_url, "enabled": True, "only_protected_branches": False}
     response = requests.post(
@@ -46,52 +70,23 @@ def _add_mirror(
     )
     raise_for_response(
         response,
-        host="self_hosted_gitlab",
+        host=host_id,
         action=f"adding {target_label} mirror to project {project_id}",
         host_url=base_url,
     )
     return response.json()
 
 
-def setup_mirrors(
-    *,
-    base_url: str,
-    self_hosted_token: str,
-    project_id: int,
-    github_repo_url: str,
-    github_token: str,
-    gitlab_repo_url: str,
-    gitlab_token: str,
-) -> list[dict]:
-    github_mirror_url = _inject_credentials(github_repo_url, "oauth2", github_token)
-    gitlab_mirror_url = _inject_credentials(gitlab_repo_url, "oauth2", gitlab_token)
-
-    return [
-        _add_mirror(
-            base_url=base_url,
-            token=self_hosted_token,
-            project_id=project_id,
-            mirror_url=github_mirror_url,
-            target_label="GitHub",
-        ),
-        _add_mirror(
-            base_url=base_url,
-            token=self_hosted_token,
-            project_id=project_id,
-            mirror_url=gitlab_mirror_url,
-            target_label="GitLab.com",
-        ),
-    ]
-
-
-def list_mirrors(*, base_url: str, token: str, project_id: int) -> list[Mirror]:
+def list_mirrors(
+    *, host_id: str, base_url: str, token: str, project_id: int
+) -> List[Mirror]:
     headers = {"PRIVATE-TOKEN": token}
     response = requests.get(
         f"{base_url}/api/v4/projects/{project_id}/remote_mirrors", headers=headers
     )
     raise_for_response(
         response,
-        host="self_hosted_gitlab",
+        host=host_id,
         action=f"listing mirrors for project {project_id}",
         host_url=base_url,
     )
@@ -107,7 +102,9 @@ def list_mirrors(*, base_url: str, token: str, project_id: int) -> list[Mirror]:
     ]
 
 
-def find_project_id(*, base_url: str, token: str, repo_path: str) -> int | None:
+def find_project_id(
+    *, host_id: str, base_url: str, token: str, repo_path: str
+) -> Optional[int]:
     headers = {"PRIVATE-TOKEN": token}
     encoded = quote(repo_path, safe="")
     response = requests.get(f"{base_url}/api/v4/projects/{encoded}", headers=headers)
@@ -117,8 +114,9 @@ def find_project_id(*, base_url: str, token: str, repo_path: str) -> int | None:
         return None
     raise_for_response(
         response,
-        host="self_hosted_gitlab",
+        host=host_id,
         action=f"looking up project '{repo_path}'",
         host_url=base_url,
     )
-    return None  # unreachable; raise_for_response always raises on non-2xx
+    # Unreachable — raise_for_response always raises on non-2xx.
+    raise AssertionError("unreachable")
