@@ -4,7 +4,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import questionary
 from questionary import Choice, Style
@@ -32,13 +32,13 @@ class CreateOptions:
     description: str
     group: str
     is_private: bool
-    github_org: Optional[str]
+    github_org: str | None
     mirror: bool
     dry_run: bool = False
 
 
 # ── Palette ────────────────────────────────────────────────────────────────
-ACCENT = "#dc2626"   # crimson — primary brand color
+ACCENT = "#dc2626"  # crimson — primary brand color
 ACCENT_DIM = "#7f1d1d"
 MUTED = "#9ca3af"
 ASH = "#6b7280"
@@ -126,7 +126,7 @@ def _section(console: Console, n: int, total: int, title: str) -> None:
     line.append(" of ", style=f"italic {ASH}")
     line.append(f"{total}", style=f"bold {ACCENT}")
     line.append("  ·  ", style=ASH)
-    line.append(title, style=f"bold")
+    line.append(title, style="bold")
     line.append(f"  {GLYPH}", style=f"bold {ACCENT}")
     console.print()
     console.print(Align.center(line))
@@ -142,9 +142,7 @@ def _review_rule(console: Console, label: str = "Review") -> None:
 # ── Configure wizard ──────────────────────────────────────────────────────
 
 
-def run_wizard(
-    *, config_path: Optional[Path] = None, console: Optional[Console] = None
-) -> WizardResult:
+def run_wizard(*, config_path: Path | None = None, console: Console | None = None) -> WizardResult:
     if not sys.stdin.isatty():
         raise WizardCancelled(
             "configure must be run from a terminal (no TTY detected). "
@@ -216,7 +214,7 @@ def run_wizard(
             style=QSTYLE,
         )
     )
-    gh_org: Optional[str] = None
+    gh_org: str | None = None
     if gh_account == "org":
         gh_org = _ask(
             questionary.text(
@@ -272,17 +270,13 @@ def run_wizard(
 
     tokens: dict[str, str] = {}
     if store != "skip":
-        console.print(
-            f"  [italic {ASH}]Input is hidden. Press Enter to skip a host.[/]"
-        )
+        console.print(f"  [italic {ASH}]Input is hidden. Press Enter to skip a host.[/]")
         for service, label in (
             ("self_hosted_gitlab", "Self-hosted GitLab"),
             ("gitlab", "GitLab.com"),
             ("github", "GitHub"),
         ):
-            token = _ask(
-                questionary.password(f"{label} token:", style=QSTYLE)
-            )
+            token = _ask(questionary.password(f"{label} token:", style=QSTYLE))
             if token.strip():
                 tokens[service] = token.strip()
 
@@ -290,17 +284,13 @@ def run_wizard(
     console.print(_summary_table(cfg, tokens, store))
     console.print()
 
-    confirmed = _ask(
-        questionary.confirm("Save this configuration?", default=True, style=QSTYLE)
-    )
+    confirmed = _ask(questionary.confirm("Save this configuration?", default=True, style=QSTYLE))
     if not confirmed:
         raise WizardCancelled("aborted by user")
 
     saved_path = save_config(cfg, config_path)
 
-    return WizardResult(
-        config=cfg, tokens=tokens, store=store, config_path=saved_path
-    )
+    return WizardResult(config=cfg, tokens=tokens, store=store, config_path=saved_path)
 
 
 def _summary_table(cfg: Config, tokens: dict[str, str], store: str) -> Table:
@@ -352,9 +342,7 @@ def _valid_repo_name(value: str) -> bool | str:
 
 def run_create_wizard(*, cfg: Config, console: Console) -> CreateOptions:
     if not sys.stdin.isatty():
-        raise WizardCancelled(
-            "create wizard needs a terminal — pass a repo name to use flag mode."
-        )
+        raise WizardCancelled("create wizard needs a terminal — pass a repo name to use flag mode.")
 
     _intro(console, "create")
 
@@ -371,9 +359,7 @@ def run_create_wizard(*, cfg: Config, console: Console) -> CreateOptions:
         )
     ).strip()
 
-    description = _ask(
-        questionary.text("Description (optional):", style=QSTYLE)
-    ).strip()
+    description = _ask(questionary.text("Description (optional):", style=QSTYLE)).strip()
 
     visibility = _ask(
         questionary.select(
@@ -487,9 +473,7 @@ def apply_token_storage(result: WizardResult, *, console: Console) -> None:
     if result.store == "keyring":
         for service, token in result.tokens.items():
             secrets_mod.set_token(service, token)
-            console.print(
-                f"  [green]✓[/green] stored [bold]{service}[/bold] in OS keyring"
-            )
+            console.print(f"  [green]✓[/green] stored [bold]{service}[/bold] in OS keyring")
     elif result.store == "env":
         console.print("\n[bold]Add these to your shell rc or a .env file:[/bold]")
         console.print(secrets_mod.export_lines(result.tokens))

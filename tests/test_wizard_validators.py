@@ -37,9 +37,7 @@ class TestLooksLikeUrl:
         assert _looks_like_url("") == "Required"
         assert _looks_like_url("   ") == "Required"
 
-    @pytest.mark.parametrize(
-        "url", ["example.com", "ftp://example.com", "git@example.com:foo.git"]
-    )
+    @pytest.mark.parametrize("url", ["example.com", "ftp://example.com", "git@example.com:foo.git"])
     def test_rejects_missing_scheme(self, url):
         result = _looks_like_url(url)
         assert isinstance(result, str)

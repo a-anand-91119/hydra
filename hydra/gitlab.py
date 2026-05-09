@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 import requests
 
@@ -19,7 +18,7 @@ class CreatedRepo:
 class GroupResolution:
     """Result of resolving / creating a nested group path."""
 
-    group_id: Optional[int]
+    group_id: int | None
     created_paths: list[str] = field(default_factory=list)
 
 
@@ -30,7 +29,7 @@ def create_repo(
     token: str,
     name: str,
     description: str,
-    namespace_id: Optional[int] = None,
+    namespace_id: int | None = None,
     is_private: bool = True,
 ) -> CreatedRepo:
     headers = {"PRIVATE-TOKEN": token}
@@ -43,9 +42,7 @@ def create_repo(
         data["namespace_id"] = namespace_id
 
     response = requests.post(f"{base_url}/api/v4/projects", headers=headers, data=data)
-    raise_for_response(
-        response, host=host, action=f"creating repo '{name}'", host_url=base_url
-    )
+    raise_for_response(response, host=host, action=f"creating repo '{name}'", host_url=base_url)
     payload = response.json()
     return CreatedRepo(http_url=payload["http_url_to_repo"], project_id=payload["id"])
 
@@ -55,7 +52,7 @@ def get_or_create_group_path(
     host: str,
     base_url: str,
     token: str,
-    group_path: Optional[str],
+    group_path: str | None,
     add_timestamp: bool = False,
 ) -> GroupResolution:
     """Walk a slash-separated group path, creating any segments that don't exist.
@@ -67,7 +64,7 @@ def get_or_create_group_path(
         return GroupResolution(group_id=None)
 
     headers = {"PRIVATE-TOKEN": token}
-    parent_id: Optional[int] = None
+    parent_id: int | None = None
     full_path_parts: list[str] = []
     created_paths: list[str] = []
 
@@ -99,9 +96,7 @@ def get_or_create_group_path(
         if parent_id is not None:
             data["parent_id"] = parent_id
 
-        create_resp = requests.post(
-            f"{base_url}/api/v4/groups", headers=headers, data=data
-        )
+        create_resp = requests.post(f"{base_url}/api/v4/groups", headers=headers, data=data)
         raise_for_response(
             create_resp,
             host=host,
@@ -115,9 +110,7 @@ def get_or_create_group_path(
     return GroupResolution(group_id=parent_id, created_paths=created_paths)
 
 
-def _find_group(
-    groups: list[dict], name: str, parent_id: Optional[int]
-) -> Optional[int]:
+def _find_group(groups: list[dict], name: str, parent_id: int | None) -> int | None:
     for group in groups:
         if group.get("name") == name and group.get("parent_id") == parent_id:
             return group["id"]

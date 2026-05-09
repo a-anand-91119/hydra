@@ -7,8 +7,8 @@ import typer
 from rich.console import Console
 
 from hydra import __version__
-from hydra import gitlab as gitlab_api
 from hydra import github as github_api
+from hydra import gitlab as gitlab_api
 from hydra import mirrors as mirrors_api
 from hydra import secrets as secrets_mod
 from hydra.config import Config, ConfigError, load_config, resolve_config_path
@@ -35,9 +35,7 @@ def _version_callback(value: bool) -> None:
 
 @app.callback()
 def _root(
-    version: bool = typer.Option(
-        False, "--version", callback=_version_callback, is_eager=True
-    ),
+    version: bool = typer.Option(False, "--version", callback=_version_callback, is_eager=True),
 ) -> None:
     pass
 
@@ -47,17 +45,15 @@ def _load_or_die(config_path: Optional[Path], console: Console) -> Config:
         return load_config(config_path)
     except ConfigError as e:
         console.print(f"[red]{e}[/red]")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
 
-def _resolve_token_or_die(
-    service: str, *, allow_prompt: bool, console: Console
-) -> str:
+def _resolve_token_or_die(service: str, *, allow_prompt: bool, console: Console) -> str:
     try:
         return secrets_mod.get_token(service, allow_prompt=allow_prompt)
     except secrets_mod.SecretError as e:
         console.print(f"[red]{e}[/red]")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
 
 @app.command()
@@ -69,15 +65,11 @@ def create(
     group: Optional[str] = typer.Option(
         None, "--group", "-g", help="Group path on self-hosted GitLab"
     ),
-    public: bool = typer.Option(
-        False, "--public", help="Create as public (default: private)"
-    ),
+    public: bool = typer.Option(False, "--public", help="Create as public (default: private)"),
     github_org: Optional[str] = typer.Option(
         None, "--github-org", help="Create under this GitHub org instead of user"
     ),
-    no_mirror: bool = typer.Option(
-        False, "--no-mirror", help="Skip push-mirror setup"
-    ),
+    no_mirror: bool = typer.Option(False, "--no-mirror", help="Skip push-mirror setup"),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Print planned actions without making API calls"
     ),
@@ -93,10 +85,10 @@ def create(
             opts = run_create_wizard(cfg=cfg, console=console)
         except WizardCancelled as e:
             console.print(f"\n[yellow]Cancelled:[/yellow] {e or 'aborted'}")
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=1) from None
         except KeyboardInterrupt:
             console.print("\n[yellow]Cancelled:[/yellow] aborted")
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=1) from None
         if dry_run:
             opts.dry_run = True
     else:
@@ -119,10 +111,7 @@ def create(
 
 def _print_dry_run(cfg: Config, opts: CreateOptions) -> None:
     typer.echo(f"[dry-run] would create '{opts.name}' on:")
-    typer.echo(
-        f"  - self-hosted: {cfg.self_hosted_gitlab.url} "
-        f"(group={opts.group or 'none'})"
-    )
+    typer.echo(f"  - self-hosted: {cfg.self_hosted_gitlab.url} (group={opts.group or 'none'})")
     typer.echo(
         f"  - gitlab.com:  {cfg.gitlab.url} "
         f"(group={cfg.gitlab.managed_group_prefix}/{opts.group or ''})"
@@ -133,12 +122,8 @@ def _print_dry_run(cfg: Config, opts: CreateOptions) -> None:
     typer.echo(f"  mirror: {'yes' if opts.mirror else 'no'}")
 
 
-def _execute_create(
-    *, cfg: Config, opts: CreateOptions, verbose: bool, console: Console
-) -> None:
-    sh_token = _resolve_token_or_die(
-        "self_hosted_gitlab", allow_prompt=True, console=console
-    )
+def _execute_create(*, cfg: Config, opts: CreateOptions, verbose: bool, console: Console) -> None:
+    sh_token = _resolve_token_or_die("self_hosted_gitlab", allow_prompt=True, console=console)
     gl_token = _resolve_token_or_die("gitlab", allow_prompt=True, console=console)
     gh_token = _resolve_token_or_die("github", allow_prompt=True, console=console)
 
@@ -153,9 +138,7 @@ def _execute_create(
             add_timestamp=False,
         )
         for path in sh_groups.created_paths:
-            created.append(
-                ("self-hosted GitLab group", f"{cfg.self_hosted_gitlab.url}/{path}")
-            )
+            created.append(("self-hosted GitLab group", f"{cfg.self_hosted_gitlab.url}/{path}"))
 
         gl_group_path = (
             f"{cfg.gitlab.managed_group_prefix}/{opts.group}"
@@ -227,12 +210,10 @@ def _execute_create(
 
     except HydraAPIError as e:
         _render_api_error(console, e, created)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
 
-def _render_api_error(
-    console: Console, err: HydraAPIError, created: list[tuple[str, str]]
-) -> None:
+def _render_api_error(console: Console, err: HydraAPIError, created: list[tuple[str, str]]) -> None:
     """Pretty-print a HydraAPIError with hint and partial-progress info."""
     console.print()
     console.print(f"[bold red]✗[/bold red] [bold]{err.message}[/bold]")
@@ -266,16 +247,15 @@ def configure(
         result = run_wizard(config_path=config_path, console=console)
     except WizardCancelled as e:
         console.print(f"\n[yellow]Configuration not saved:[/yellow] {e or 'aborted'}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
     except KeyboardInterrupt:
         console.print("\n[yellow]Configuration not saved:[/yellow] aborted")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
     console.print(f"\n[green]✓[/green] Config saved to [bold]{result.config_path}[/bold]")
     apply_token_storage(result, console=console)
     console.print(
-        "\n[dim]Next:[/dim] try [bold]hydra create my-repo --dry-run[/bold] "
-        "to verify the setup."
+        "\n[dim]Next:[/dim] try [bold]hydra create my-repo --dry-run[/bold] to verify the setup."
     )
 
 
@@ -290,9 +270,7 @@ def status(
     """Show mirror status for a repo on the self-hosted GitLab."""
     console = Console()
     cfg = _load_or_die(config_path, console)
-    sh_token = _resolve_token_or_die(
-        "self_hosted_gitlab", allow_prompt=True, console=console
-    )
+    sh_token = _resolve_token_or_die("self_hosted_gitlab", allow_prompt=True, console=console)
 
     effective_group = group if group is not None else cfg.defaults.group
     repo_path = f"{effective_group}/{name}" if effective_group else name
@@ -312,7 +290,7 @@ def status(
         )
     except HydraAPIError as e:
         _render_api_error(console, e, created=[])
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
     if not mirror_list:
         console.print(f"No mirrors configured for {repo_path}.")
@@ -341,4 +319,3 @@ def show_config_path(
 
 if __name__ == "__main__":
     app()
-

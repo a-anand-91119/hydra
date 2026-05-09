@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
 
 import pytest
 
@@ -12,7 +11,7 @@ class FakeResponse:
     def __init__(
         self,
         status_code: int,
-        body: Optional[dict | list | str] = None,
+        body: dict | list | str | None = None,
     ) -> None:
         self.status_code = status_code
         if isinstance(body, (dict, list)):

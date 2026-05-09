@@ -1,10 +1,12 @@
 stages:
+  - lint
   - test
   - build
   - publish
 
 default:
   image: python:3.11-slim
+  interruptible: true
   cache:
     key:
       files:
@@ -15,11 +17,31 @@ default:
     - export PIP_CACHE_DIR="$CI_PROJECT_DIR/.cache/pip"
     - pip install --upgrade pip
 
-unit-tests:
-  stage: test
+lint:
+  stage: lint
   script:
     - pip install -e '.[dev]'
-    - pytest --cov=hydra --cov-report=term-missing
+    - ruff check hydra tests
+    - ruff format --check hydra tests
+  rules:
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+unit-tests:
+  stage: test
+  needs: ["lint"]
+  script:
+    - pip install -e '.[dev]'
+    - pytest --cov=hydra --cov-report=term-missing --cov-report=xml --junitxml=report.xml
+  coverage: '/TOTAL.*?(\d+(?:\.\d+)?)%/'
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    expire_in: 1 week
   rules:
     - if: $CI_COMMIT_BRANCH
     - if: $CI_COMMIT_TAG
@@ -38,6 +60,8 @@ smoke:
 
 build:
   stage: build
+  needs: ["lint", "unit-tests", "smoke"]
+  interruptible: false
   script:
     - pip install build
     - python -m build
@@ -51,6 +75,10 @@ build:
 publish:
   stage: publish
   needs: ["build"]
+  interruptible: false
+  environment:
+    name: pypi
+    url: https://pypi.org/project/hydra-repo-syncer/
   id_tokens:
     GITLAB_OIDC_TOKEN:
       aud: https://iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_WIF_POOL}/providers/${GCP_WIF_PROVIDER}

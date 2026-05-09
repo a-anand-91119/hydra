@@ -11,7 +11,6 @@ from hydra.errors import (
     raise_for_response,
 )
 
-
 # ── _short_body ─────────────────────────────────────────────────────────────
 
 

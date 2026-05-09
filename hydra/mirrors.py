@@ -1,21 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 from urllib.parse import quote, urlparse, urlunparse
 
 import requests
 
-from hydra.errors import HydraAPIError, raise_for_response
+from hydra.errors import raise_for_response
 
 
 @dataclass
 class Mirror:
     url: str
     enabled: bool
-    last_update_status: Optional[str]
-    last_update_at: Optional[str]
-    last_error: Optional[str]
+    last_update_status: str | None
+    last_update_at: str | None
+    last_error: str | None
 
 
 def _inject_credentials(repo_url: str, username: str, token: str) -> str:
@@ -85,9 +84,7 @@ def setup_mirrors(
     ]
 
 
-def list_mirrors(
-    *, base_url: str, token: str, project_id: int
-) -> list[Mirror]:
+def list_mirrors(*, base_url: str, token: str, project_id: int) -> list[Mirror]:
     headers = {"PRIVATE-TOKEN": token}
     response = requests.get(
         f"{base_url}/api/v4/projects/{project_id}/remote_mirrors", headers=headers
@@ -110,9 +107,7 @@ def list_mirrors(
     ]
 
 
-def find_project_id(
-    *, base_url: str, token: str, repo_path: str
-) -> Optional[int]:
+def find_project_id(*, base_url: str, token: str, repo_path: str) -> int | None:
     headers = {"PRIVATE-TOKEN": token}
     encoded = quote(repo_path, safe="")
     response = requests.get(f"{base_url}/api/v4/projects/{encoded}", headers=headers)

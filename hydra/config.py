@@ -3,10 +3,8 @@ from __future__ import annotations
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Optional
 
 import yaml
-
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "hydra" / "config.yaml"
 
@@ -29,7 +27,7 @@ class GitLabCloudConfig(HostConfig):
 @dataclass
 class GitHubConfig(HostConfig):
     url: str = "https://api.github.com"
-    org: Optional[str] = None
+    org: str | None = None
 
 
 @dataclass
@@ -49,7 +47,7 @@ class Config:
         return asdict(self)
 
 
-def resolve_config_path(explicit: Optional[Path] = None) -> Path:
+def resolve_config_path(explicit: Path | None = None) -> Path:
     if explicit is not None:
         return explicit
     env = os.environ.get("HYDRA_CONFIG")
@@ -58,18 +56,16 @@ def resolve_config_path(explicit: Optional[Path] = None) -> Path:
     return DEFAULT_CONFIG_PATH
 
 
-def load_config(path: Optional[Path] = None) -> Config:
+def load_config(path: Path | None = None) -> Config:
     cfg_path = resolve_config_path(path)
     if not cfg_path.exists():
-        raise ConfigError(
-            f"No config file at {cfg_path}. Run `hydra configure` to create one."
-        )
+        raise ConfigError(f"No config file at {cfg_path}. Run `hydra configure` to create one.")
     with cfg_path.open("r") as f:
         raw = yaml.safe_load(f) or {}
     return _from_dict(raw)
 
 
-def load_config_or_default(path: Optional[Path] = None) -> Config:
+def load_config_or_default(path: Path | None = None) -> Config:
     cfg_path = resolve_config_path(path)
     if not cfg_path.exists():
         return Config()
@@ -78,7 +74,7 @@ def load_config_or_default(path: Optional[Path] = None) -> Config:
     return _from_dict(raw)
 
 
-def save_config(cfg: Config, path: Optional[Path] = None) -> Path:
+def save_config(cfg: Config, path: Path | None = None) -> Path:
     cfg_path = resolve_config_path(path)
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with cfg_path.open("w") as f:
@@ -99,9 +95,7 @@ def _from_dict(raw: dict) -> Config:
         self_hosted_gitlab=HostConfig(url=sh["url"]),
         gitlab=GitLabCloudConfig(
             url=gl.get("url", "https://gitlab.com"),
-            managed_group_prefix=gl.get(
-                "managed_group_prefix", "repo-syncer-managed-groups"
-            ),
+            managed_group_prefix=gl.get("managed_group_prefix", "repo-syncer-managed-groups"),
         ),
         github=GitHubConfig(
             url=gh.get("url", "https://api.github.com"),

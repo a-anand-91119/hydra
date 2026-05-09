@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Optional
 
 import requests
-
 
 HOST_LABELS = {
     "self_hosted_gitlab": "self-hosted GitLab",
@@ -20,7 +18,7 @@ ENV_VAR = {
 }
 
 
-def _token_page(host: str, host_url: Optional[str]) -> str:
+def _token_page(host: str, host_url: str | None) -> str:
     """Where the user should mint a fresh token."""
     if host == "github":
         return "https://github.com/settings/tokens"
@@ -43,9 +41,9 @@ BODY_SNIPPET_LIMIT = 140
 @dataclass
 class HydraAPIError(Exception):
     message: str
-    host: Optional[str] = None
-    status_code: Optional[int] = None
-    hint: Optional[str] = None
+    host: str | None = None
+    status_code: int | None = None
+    hint: str | None = None
 
     def __str__(self) -> str:
         return self.message
@@ -56,7 +54,7 @@ def raise_for_response(
     *,
     host: str,
     action: str,
-    host_url: Optional[str] = None,
+    host_url: str | None = None,
 ) -> requests.Response:
     """Convert a non-2xx Response into a HydraAPIError with an actionable hint.
 

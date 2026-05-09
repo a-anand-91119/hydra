@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
 
 import requests
 
@@ -14,7 +13,7 @@ def create_repo(
     token: str,
     name: str,
     description: str,
-    org: Optional[str] = None,
+    org: str | None = None,
     is_private: bool = True,
 ) -> str:
     headers = {

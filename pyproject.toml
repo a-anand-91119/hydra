@@ -24,6 +24,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "ruff>=0.6",
 ]
 
 [project.scripts]
@@ -36,3 +37,26 @@ exclude = ["tests*", "venv*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+extend-exclude = ["venv", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]  # line length handled by formatter
+
+[tool.ruff.lint.per-file-ignores]
+# Typer requires `typer.Option(...)` as parameter defaults (B008) and
+# evaluates annotations at runtime via get_type_hints, which can't resolve
+# `X | None` on Python 3.9 (UP007/UP045). Keep cli.py compatible.
+"hydra/cli.py" = ["B008", "UP007", "UP045"]
+
+[tool.coverage.run]
+source = ["hydra"]
+omit = ["hydra/__main__.py"]
+
+[tool.coverage.report]
+fail_under = 30
+show_missing = true
