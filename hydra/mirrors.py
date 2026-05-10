@@ -77,9 +77,7 @@ def add_mirror(
     return response.json()
 
 
-def list_mirrors(
-    *, host_id: str, base_url: str, token: str, project_id: int
-) -> List[Mirror]:
+def list_mirrors(*, host_id: str, base_url: str, token: str, project_id: int) -> List[Mirror]:
     headers = {"PRIVATE-TOKEN": token}
     response = requests.get(
         f"{base_url}/api/v4/projects/{project_id}/remote_mirrors", headers=headers
@@ -102,9 +100,7 @@ def list_mirrors(
     ]
 
 
-def find_project_id(
-    *, host_id: str, base_url: str, token: str, repo_path: str
-) -> Optional[int]:
+def find_project_id(*, host_id: str, base_url: str, token: str, repo_path: str) -> Optional[int]:
     headers = {"PRIVATE-TOKEN": token}
     encoded = quote(repo_path, safe="")
     response = requests.get(f"{base_url}/api/v4/projects/{encoded}", headers=headers)

@@ -5,6 +5,7 @@ Env-first ordering means an explicit `HYDRA_TOKEN_<ID>` always wins, which is
 what users expect for CI overrides and for invalidating a stale keyring entry.
 Use `hydra configure` to populate the keyring for desktop convenience.
 """
+
 from __future__ import annotations
 
 import os

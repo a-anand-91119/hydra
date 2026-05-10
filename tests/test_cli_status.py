@@ -50,11 +50,15 @@ def test_status_reconciles_mirror_urls_with_fork_ids(cfg):
         ),
     ]
 
-    with patch.object(cli_mod, "_load_or_die", return_value=cfg), \
-         patch("hydra.cli.secrets_mod.get_token", return_value="tok"), \
-         patch("hydra.providers.gitlab.GitLabProvider.find_project",
-               return_value=RepoRef(http_url="", project_id=42)), \
-         patch("hydra.providers.gitlab.GitLabProvider.list_mirrors", return_value=mirrors):
+    with (
+        patch.object(cli_mod, "_load_or_die", return_value=cfg),
+        patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
+        patch(
+            "hydra.providers.gitlab.GitLabProvider.find_project",
+            return_value=RepoRef(http_url="", project_id=42),
+        ),
+        patch("hydra.providers.gitlab.GitLabProvider.list_mirrors", return_value=mirrors),
+    ):
         result = runner.invoke(cli_mod.app, ["status", "probe"])
 
     assert result.exit_code == 0, result.output
@@ -78,11 +82,15 @@ def test_status_scrubs_credentials_from_mirror_url(cfg):
             last_error=None,
         ),
     ]
-    with patch.object(cli_mod, "_load_or_die", return_value=cfg), \
-         patch("hydra.cli.secrets_mod.get_token", return_value="tok"), \
-         patch("hydra.providers.gitlab.GitLabProvider.find_project",
-               return_value=RepoRef(http_url="", project_id=42)), \
-         patch("hydra.providers.gitlab.GitLabProvider.list_mirrors", return_value=leaky):
+    with (
+        patch.object(cli_mod, "_load_or_die", return_value=cfg),
+        patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
+        patch(
+            "hydra.providers.gitlab.GitLabProvider.find_project",
+            return_value=RepoRef(http_url="", project_id=42),
+        ),
+        patch("hydra.providers.gitlab.GitLabProvider.list_mirrors", return_value=leaky),
+    ):
         result = runner.invoke(cli_mod.app, ["status", "probe"])
 
     assert result.exit_code == 0, result.output
@@ -104,8 +112,10 @@ def test_status_blocks_when_primary_lacks_status_capability(cfg):
         supports_status_lookup=False,
         inbound_mirror_username="oauth2",
     )
-    with patch.object(providers_mod, "capabilities_for", return_value=fake_caps), \
-         patch.object(cli_mod, "_load_or_die", return_value=cfg):
+    with (
+        patch.object(providers_mod, "capabilities_for", return_value=fake_caps),
+        patch.object(cli_mod, "_load_or_die", return_value=cfg),
+    ):
         result = runner.invoke(cli_mod.app, ["status", "probe"])
     assert result.exit_code == 1
     assert "not supported" in result.output.lower()
@@ -113,9 +123,11 @@ def test_status_blocks_when_primary_lacks_status_capability(cfg):
 
 def test_status_unknown_repo_exits_1(cfg):
     runner = CliRunner()
-    with patch.object(cli_mod, "_load_or_die", return_value=cfg), \
-         patch("hydra.cli.secrets_mod.get_token", return_value="tok"), \
-         patch("hydra.providers.gitlab.GitLabProvider.find_project", return_value=None):
+    with (
+        patch.object(cli_mod, "_load_or_die", return_value=cfg),
+        patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
+        patch("hydra.providers.gitlab.GitLabProvider.find_project", return_value=None),
+    ):
         result = runner.invoke(cli_mod.app, ["status", "missing"])
 
     assert result.exit_code == 1
@@ -126,39 +138,40 @@ class TestMatchFork:
     def test_exact_host_matches(self):
         fork = HostSpec(id="cloud", kind="gitlab", url="https://gitlab.com")
         other = HostSpec(id="gh", kind="github", url="https://api.github.com")
-        assert cli_mod._match_fork(
-            "https://oauth2:tok@gitlab.com/foo/bar.git", [fork, other]
-        ).id == "cloud"
+        assert (
+            cli_mod._match_fork("https://oauth2:tok@gitlab.com/foo/bar.git", [fork, other]).id
+            == "cloud"
+        )
 
     def test_different_host_does_not_match(self):
         fork = HostSpec(id="cloud", kind="gitlab", url="https://gitlab.com")
         # api.github.com vs github.com → distinct hosts.
-        assert cli_mod._match_fork(
-            "https://oauth2:tok@api.github.com/foo/bar.git", [fork]
-        ) is None
+        assert cli_mod._match_fork("https://oauth2:tok@api.github.com/foo/bar.git", [fork]) is None
 
     def test_substring_attack_does_not_match(self):
         # Substring match would be unsafe — ensure exact equality.
         fork = HostSpec(id="cloud", kind="gitlab", url="https://gitlab.com")
-        assert cli_mod._match_fork(
-            "https://oauth2:tok@evilgitlab.com.attacker.example/foo.git", [fork]
-        ) is None
-        assert cli_mod._match_fork(
-            "https://oauth2:tok@gitlab.com.evil.example/foo.git", [fork]
-        ) is None
+        assert (
+            cli_mod._match_fork(
+                "https://oauth2:tok@evilgitlab.com.attacker.example/foo.git", [fork]
+            )
+            is None
+        )
+        assert (
+            cli_mod._match_fork("https://oauth2:tok@gitlab.com.evil.example/foo.git", [fork])
+            is None
+        )
 
     def test_case_insensitive_host(self):
         fork = HostSpec(id="cloud", kind="gitlab", url="https://GitLab.com")
-        assert cli_mod._match_fork(
-            "https://oauth2:tok@gitlab.com/foo.git", [fork]
-        ).id == "cloud"
+        assert cli_mod._match_fork("https://oauth2:tok@gitlab.com/foo.git", [fork]).id == "cloud"
 
     def test_port_independent(self):
         # Same host, different ports — current behavior matches by hostname only.
         fork = HostSpec(id="cloud", kind="gitlab", url="https://gitlab.com:443")
-        assert cli_mod._match_fork(
-            "https://oauth2:tok@gitlab.com:8443/foo.git", [fork]
-        ).id == "cloud"
+        assert (
+            cli_mod._match_fork("https://oauth2:tok@gitlab.com:8443/foo.git", [fork]).id == "cloud"
+        )
 
 
 class TestParseHostOptions:

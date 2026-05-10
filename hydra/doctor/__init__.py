@@ -1,4 +1,5 @@
 """hydra doctor — diagnose configuration, tokens, and topology."""
+
 from __future__ import annotations
 
 import os
@@ -186,9 +187,7 @@ def _render_report(console: Console, report: Report, *, verbose: bool) -> None:
             parts.append(f"{n_err} error(s)")
         console.print(", ".join(parts) + ".")
         if n_fix:
-            console.print(
-                f"Run [bold]hydra doctor --fix[/] to apply {n_fix} safe fix(es)."
-            )
+            console.print(f"Run [bold]hydra doctor --fix[/] to apply {n_fix} safe fix(es).")
 
 
 def _exit_code(report: Report, *, internal_error: bool) -> int:

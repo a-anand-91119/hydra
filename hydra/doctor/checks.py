@@ -2,6 +2,7 @@
 zero or more `Finding`s. Checks must be side-effect free — fixes live in
 `fixes.py`.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -127,9 +128,7 @@ def check_primary_capable(state: DoctorState) -> List[Finding]:
             Finding(
                 section="Hosts",
                 level=Level.ERROR,
-                message=(
-                    f"primary {primary.id!r} (kind={primary.kind}) cannot be a mirror source"
-                ),
+                message=(f"primary {primary.id!r} (kind={primary.kind}) cannot be a mirror source"),
             )
         ]
     return [

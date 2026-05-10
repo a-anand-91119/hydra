@@ -32,9 +32,7 @@ class GitHubProvider:
         v = self.spec.options.get("org")
         return v or None
 
-    def ensure_namespace(
-        self, *, group_path: Optional[str], token: str
-    ) -> NamespaceRef:
+    def ensure_namespace(self, *, group_path: Optional[str], token: str) -> NamespaceRef:
         org = self._org()
         return NamespaceRef(namespace_id=None, created_paths=[], full_path=org)
 

@@ -54,9 +54,7 @@ class Provider(Protocol):
     spec: HostSpec
     capabilities: Capabilities
 
-    def ensure_namespace(
-        self, *, group_path: Optional[str], token: str
-    ) -> NamespaceRef: ...
+    def ensure_namespace(self, *, group_path: Optional[str], token: str) -> NamespaceRef: ...
 
     def create_repo(
         self,
@@ -86,6 +84,4 @@ class MirrorSource(Provider, Protocol):
 
     def find_project(self, *, token: str, repo_path: str) -> Optional[RepoRef]: ...
 
-    def list_mirrors(
-        self, *, token: str, primary_repo: RepoRef
-    ) -> List[MirrorInfo]: ...
+    def list_mirrors(self, *, token: str, primary_repo: RepoRef) -> List[MirrorInfo]: ...

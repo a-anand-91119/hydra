@@ -44,9 +44,7 @@ class GitLabProvider:
             return f"{prefix}/{group_path}"
         return prefix
 
-    def ensure_namespace(
-        self, *, group_path: Optional[str], token: str
-    ) -> NamespaceRef:
+    def ensure_namespace(self, *, group_path: Optional[str], token: str) -> NamespaceRef:
         full = self._effective_group_path(group_path)
         res = gitlab_api.get_or_create_group_path(
             host=self.spec.id,
@@ -97,9 +95,7 @@ class GitLabProvider:
     ) -> Dict[str, Any]:
         if primary_repo.project_id is None:
             raise ValueError("GitLab mirror requires primary_repo.project_id")
-        mirror_url = mirrors_api.inject_credentials(
-            target_url, target_username, target_token
-        )
+        mirror_url = mirrors_api.inject_credentials(target_url, target_username, target_token)
         return mirrors_api.add_mirror(
             host_id=self.spec.id,
             base_url=self.spec.url,
@@ -120,9 +116,7 @@ class GitLabProvider:
             return None
         return RepoRef(http_url="", project_id=pid, namespace_path=None)
 
-    def list_mirrors(
-        self, *, token: str, primary_repo: RepoRef
-    ) -> List[MirrorInfo]:
+    def list_mirrors(self, *, token: str, primary_repo: RepoRef) -> List[MirrorInfo]:
         if primary_repo.project_id is None:
             return []
         ms = mirrors_api.list_mirrors(

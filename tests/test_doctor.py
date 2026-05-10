@@ -90,7 +90,8 @@ class TestCheckLegacyEnvVars:
         monkeypatch.setenv("HYDRA_GITHUB_TOKEN", "legacy-tok")
         result = run_doctor(config_path=v2_path, console=quiet_console)
         legacy = [
-            f for f in result.report.findings
+            f
+            for f in result.report.findings
             if "HYDRA_GITHUB_TOKEN" in f.message and f.level is Level.WARN
         ]
         assert legacy, "expected a legacy-env-var warning"
@@ -112,13 +113,18 @@ class TestCheckTokenResolvable:
         assert all(f.level is Level.OK for f in token_findings if "—" in f.message)
 
     def test_missing_token_warns(self, v2_path, quiet_console, monkeypatch):
-        for name in ("HYDRA_TOKEN_SELF_HOSTED_GITLAB", "HYDRA_TOKEN_GITLAB", "HYDRA_TOKEN_GITHUB",
-                     "HYDRA_GITHUB_TOKEN", "HYDRA_GITLAB_TOKEN", "HYDRA_SELF_HOSTED_GITLAB_TOKEN"):
+        for name in (
+            "HYDRA_TOKEN_SELF_HOSTED_GITLAB",
+            "HYDRA_TOKEN_GITLAB",
+            "HYDRA_TOKEN_GITHUB",
+            "HYDRA_GITHUB_TOKEN",
+            "HYDRA_GITLAB_TOKEN",
+            "HYDRA_SELF_HOSTED_GITLAB_TOKEN",
+        ):
             monkeypatch.delenv(name, raising=False)
         result = run_doctor(config_path=v2_path, console=quiet_console)
         token_warnings = [
-            f for f in result.report.findings
-            if f.section == "Tokens" and f.level is Level.WARN
+            f for f in result.report.findings if f.section == "Tokens" and f.level is Level.WARN
         ]
         assert len(token_warnings) >= 3  # one per host
 
@@ -156,8 +162,7 @@ class TestFixFlow:
         assert siblings, "expected a backup file"
         # Final report has no remaining pending-migration warning
         config_warnings = [
-            f for f in result.report.findings
-            if f.section == "Config" and f.level is Level.WARN
+            f for f in result.report.findings if f.section == "Config" and f.level is Level.WARN
         ]
         assert config_warnings == []
 
@@ -192,9 +197,7 @@ class TestCliExitCodes:
         for name in ("HYDRA_TOKEN_SELF_HOSTED_GITLAB", "HYDRA_TOKEN_GITLAB", "HYDRA_TOKEN_GITHUB"):
             monkeypatch.setenv(name, "tok")
         runner = CliRunner()
-        result = runner.invoke(
-            cli_mod.app, ["doctor", "--fix", "--config", str(legacy_path)]
-        )
+        result = runner.invoke(cli_mod.app, ["doctor", "--fix", "--config", str(legacy_path)])
         assert result.exit_code == EXIT_OK, result.output
 
 

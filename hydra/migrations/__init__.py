@@ -5,6 +5,7 @@ Migrations are append-only and idempotent: bugs are fixed by adding *another*
 migration, never by editing a released one. This file's `_MIGRATIONS` list
 is the canonical, ordered chain.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple

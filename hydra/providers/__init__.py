@@ -5,6 +5,7 @@ to avoid circular import surprises (config.py imports this module, and
 providers must in turn import API modules that may transitively pull in
 hydra.config). Call `bootstrap()` once from your entry point (cli, tests).
 """
+
 from __future__ import annotations
 
 from typing import Callable, Dict, List
@@ -30,22 +31,16 @@ class ProviderRegistrationError(Exception):
     pass
 
 
-def register(
-    kind: str, factory: ProviderFactory, capabilities: Capabilities
-) -> None:
+def register(kind: str, factory: ProviderFactory, capabilities: Capabilities) -> None:
     if kind in _REGISTRY:
-        raise ProviderRegistrationError(
-            f"provider kind {kind!r} already registered"
-        )
+        raise ProviderRegistrationError(f"provider kind {kind!r} already registered")
     _REGISTRY[kind] = factory
     _CAPABILITIES[kind] = capabilities
 
 
 def get(kind: str) -> ProviderFactory:
     if kind not in _REGISTRY:
-        raise KeyError(
-            f"Unknown provider kind: {kind!r}. Registered: {sorted(_REGISTRY)}"
-        )
+        raise KeyError(f"Unknown provider kind: {kind!r}. Registered: {sorted(_REGISTRY)}")
     return _REGISTRY[kind]
 
 

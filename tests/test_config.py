@@ -11,10 +11,18 @@ def _new_shape(**overrides):
     raw = {
         "hosts": [
             {"id": "internal", "kind": "gitlab", "url": "https://gl.internal"},
-            {"id": "cloud", "kind": "gitlab", "url": "https://gitlab.com",
-             "options": {"managed_group_prefix": "mp"}},
-            {"id": "gh", "kind": "github", "url": "https://api.github.com",
-             "options": {"org": "acme"}},
+            {
+                "id": "cloud",
+                "kind": "gitlab",
+                "url": "https://gitlab.com",
+                "options": {"managed_group_prefix": "mp"},
+            },
+            {
+                "id": "gh",
+                "kind": "github",
+                "url": "https://api.github.com",
+                "options": {"org": "acme"},
+            },
         ],
         "primary": "internal",
         "forks": ["cloud", "gh"],
@@ -201,5 +209,3 @@ class TestMigrationRoundTrip:
         save_config(second, legacy_path)
         third = load_config(legacy_path)
         assert third.to_dict() == second.to_dict()
-
-

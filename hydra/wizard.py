@@ -265,9 +265,7 @@ def _prompt_host(*, existing: Optional[HostSpec], taken: Set[str]) -> HostSpec:
     return HostSpec(id=host_id, kind=kind, url=url, options=options)
 
 
-def _manage_hosts(
-    *, existing: List[HostSpec], console: Console
-) -> List[HostSpec]:
+def _manage_hosts(*, existing: List[HostSpec], console: Console) -> List[HostSpec]:
     hosts = list(existing)
     while True:
         if hosts:
@@ -325,14 +323,14 @@ def _manage_hosts(
 
 
 def _pick_primary(hosts: List[HostSpec], *, default: Optional[str]) -> str:
-    candidates = [
-        h for h in hosts if providers_mod.capabilities_for(h.kind).supports_mirror_source
-    ]
+    candidates = [h for h in hosts if providers_mod.capabilities_for(h.kind).supports_mirror_source]
     if not candidates:
         raise WizardCancelled(
             "no host with mirror-source capability — add a GitLab-family host first"
         )
-    default_id = default if default and any(h.id == default for h in candidates) else candidates[0].id
+    default_id = (
+        default if default and any(h.id == default for h in candidates) else candidates[0].id
+    )
     return _ask(
         questionary.select(
             "Primary (source) host:",
@@ -355,10 +353,7 @@ def _pick_forks(
     if not pool:
         raise WizardCancelled("at least one fork is required (add another host first)")
     default_set = set(default)
-    choices = [
-        Choice(f"{h.id}  ({h.kind})", value=h.id, checked=h.id in default_set)
-        for h in pool
-    ]
+    choices = [Choice(f"{h.id}  ({h.kind})", value=h.id, checked=h.id in default_set) for h in pool]
     for _attempt in range(max_attempts):
         picked = _ask(
             questionary.checkbox(
@@ -375,9 +370,7 @@ def _pick_forks(
         else:
             # Fallback when no console plumbed through (used by some tests).
             print(msg)
-    raise WizardCancelled(
-        "no forks selected after multiple attempts — re-run `hydra configure`"
-    )
+    raise WizardCancelled("no forks selected after multiple attempts — re-run `hydra configure`")
 
 
 # ── Configure wizard ──────────────────────────────────────────────────────

@@ -78,14 +78,10 @@ def _parse_host_options(values: List[str]) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
     for raw in values:
         if "=" not in raw:
-            raise typer.BadParameter(
-                f"--host-option must be `id.key=value`, got {raw!r}"
-            )
+            raise typer.BadParameter(f"--host-option must be `id.key=value`, got {raw!r}")
         spec, value = raw.split("=", 1)
         if "." not in spec:
-            raise typer.BadParameter(
-                f"--host-option spec must be `id.key`, got {spec!r}"
-            )
+            raise typer.BadParameter(f"--host-option spec must be `id.key`, got {spec!r}")
         host_id, key = spec.split(".", 1)
         host_id = host_id.strip()
         key = key.strip()
@@ -109,9 +105,7 @@ def _apply_overrides(cfg: Config, overrides: Dict[str, Dict[str, Any]]) -> Confi
         try:
             host = cfg.host(host_id)
         except KeyError:
-            raise typer.BadParameter(
-                f"--host-option references unknown host {host_id!r}"
-            ) from None
+            raise typer.BadParameter(f"--host-option references unknown host {host_id!r}") from None
         host.options.update(kvs)
     return cfg
 
@@ -266,9 +260,7 @@ def _execute_create(*, cfg: Config, opts: CreateOptions, verbose: bool, console:
         raise typer.Exit(code=1) from None
 
 
-def _render_api_error(
-    console: Console, err: HydraAPIError, created: List[Tuple[str, str]]
-) -> None:
+def _render_api_error(console: Console, err: HydraAPIError, created: List[Tuple[str, str]]) -> None:
     """Pretty-print a HydraAPIError with hint and partial-progress info."""
     console.print()
     console.print(f"[bold red]✗[/bold red] [bold]{err.message}[/bold]")

@@ -3,6 +3,7 @@
 Each handler corresponds to one or more `Finding.fix_id` values. Handlers
 mutate state and return a one-line description of what they did.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

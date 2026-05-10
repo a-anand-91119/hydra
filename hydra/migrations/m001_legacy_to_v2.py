@@ -19,6 +19,7 @@ V2 shape:
 Unknown fields under each legacy host block are preserved verbatim under the
 new `options` mapping.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List
@@ -66,9 +67,7 @@ def apply(raw: Dict[str, Any], ctx: MigrationContext) -> Dict[str, Any]:
     sh_options.update(_extras(sh, "self_hosted_gitlab"))
 
     gl_options: Dict[str, Any] = {
-        "managed_group_prefix": gl.get(
-            "managed_group_prefix", "repo-syncer-managed-groups"
-        ),
+        "managed_group_prefix": gl.get("managed_group_prefix", "repo-syncer-managed-groups"),
         "add_timestamp": bool(gl.get("add_timestamp", True)),
     }
     gl_options.update(_extras(gl, "gitlab"))

@@ -2,6 +2,7 @@
 provider abstraction. Mocks the underlying HTTP-calling functions in
 hydra.gitlab / hydra.github / hydra.mirrors.
 """
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -64,11 +65,13 @@ def console():
 
 @pytest.fixture
 def patches():
-    with patch("hydra.cli.secrets_mod.get_token", side_effect=lambda hid, **_: f"tok-{hid}"), \
-         patch("hydra.gitlab.get_or_create_group_path") as gl_groups, \
-         patch("hydra.gitlab.create_repo") as gl_create, \
-         patch("hydra.github.create_repo") as gh_create, \
-         patch("hydra.mirrors.add_mirror") as mi_add:
+    with (
+        patch("hydra.cli.secrets_mod.get_token", side_effect=lambda hid, **_: f"tok-{hid}"),
+        patch("hydra.gitlab.get_or_create_group_path") as gl_groups,
+        patch("hydra.gitlab.create_repo") as gl_create,
+        patch("hydra.github.create_repo") as gh_create,
+        patch("hydra.mirrors.add_mirror") as mi_add,
+    ):
         yield {
             "gl_groups": gl_groups,
             "gl_create": gl_create,
@@ -110,9 +113,7 @@ class TestExecuteCreateHappyPath:
             assert call.kwargs["project_id"] == 999
             assert call.kwargs["base_url"] == "https://gitlab.example.com"
 
-    def test_primary_no_timestamp_fork_gitlab_com_timestamped(
-        self, cfg, opts, console, patches
-    ):
+    def test_primary_no_timestamp_fork_gitlab_com_timestamped(self, cfg, opts, console, patches):
         _stub_happy(patches)
         _execute_create(cfg=cfg, opts=opts, verbose=False, console=console)
 
@@ -134,9 +135,7 @@ class TestExecuteCreateHappyPath:
 
 
 class TestExecuteCreatePartialFailure:
-    def test_github_failure_after_gitlab_repos_reports_orphans(
-        self, cfg, opts, console, patches
-    ):
+    def test_github_failure_after_gitlab_repos_reports_orphans(self, cfg, opts, console, patches):
         import typer
 
         _stub_happy(patches)
@@ -152,9 +151,7 @@ class TestExecuteCreatePartialFailure:
         # mirrors never reached
         patches["mi_add"].assert_not_called()
 
-    def test_partial_mirror_failure_lists_succeeded_mirrors(
-        self, cfg, opts, console, patches
-    ):
+    def test_partial_mirror_failure_lists_succeeded_mirrors(self, cfg, opts, console, patches):
         import typer
 
         _stub_happy(patches)
@@ -181,8 +178,12 @@ class TestNForks:
             hosts=[
                 HostSpec(id="primary", kind="gitlab", url="https://primary.gl"),
                 HostSpec(id="gh", kind="github", url="https://api.github.com"),
-                HostSpec(id="cloud", kind="gitlab", url="https://gitlab.com",
-                         options={"managed_group_prefix": "mp"}),
+                HostSpec(
+                    id="cloud",
+                    kind="gitlab",
+                    url="https://gitlab.com",
+                    options={"managed_group_prefix": "mp"},
+                ),
                 HostSpec(id="extra", kind="gitlab", url="https://extra.gl"),
             ],
             primary="primary",
