@@ -22,7 +22,7 @@ default:
   before_script:
     - export UV_CACHE_DIR="$CI_PROJECT_DIR/.cache/uv"
     - pip install --quiet uv
-    - uv venv .venv
+    - test -d .venv || uv venv .venv
     - . .venv/bin/activate
 
 lint:
