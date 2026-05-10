@@ -1,3 +1,8 @@
+workflow:
+  rules:
+    - if: $CI_SERVER_HOST == "gitlab.notyouraverage.dev"
+    - when: never
+
 stages:
   - lint
   - test
@@ -12,15 +17,18 @@ default:
       files:
         - pyproject.toml
     paths:
-      - .cache/pip
+      - .venv/
+      - .cache/uv
   before_script:
-    - export PIP_CACHE_DIR="$CI_PROJECT_DIR/.cache/pip"
-    - pip install --upgrade pip
+    - export UV_CACHE_DIR="$CI_PROJECT_DIR/.cache/uv"
+    - pip install --quiet uv
+    - uv venv .venv
+    - . .venv/bin/activate
 
 lint:
   stage: lint
   script:
-    - pip install -e '.[dev]'
+    - uv pip install -e '.[dev]'
     - ruff check hydra tests
     - ruff format --check hydra tests
   rules:
@@ -29,10 +37,9 @@ lint:
 
 unit-tests:
   stage: test
-  needs: ["lint"]
   script:
-    - pip install -e '.[dev]'
-    - pytest --cov=hydra --cov-report=term-missing --cov-report=xml --junitxml=report.xml
+    - uv pip install -e '.[dev]'
+    - pytest -n auto --cov=hydra --cov-report=term-missing --cov-report=xml --junitxml=report.xml
   coverage: '/TOTAL.*?(\d+(?:\.\d+)?)%/'
   artifacts:
     when: always
@@ -48,9 +55,8 @@ unit-tests:
 
 smoke:
   stage: test
-  needs: ["unit-tests"]
   script:
-    - pip install -e .
+    - uv pip install -e .
     - python -c "from hydra.cli import app; print('import ok')"
     - hydra --help
     - hydra --version
@@ -63,7 +69,7 @@ build:
   needs: ["lint", "unit-tests", "smoke"]
   interruptible: false
   script:
-    - pip install build
+    - uv pip install build
     - python -m build
   artifacts:
     paths:
@@ -74,8 +80,11 @@ build:
 
 publish:
   stage: publish
+  image: python:3.11
   needs: ["build"]
   interruptible: false
+  cache: []
+  before_script: []
   environment:
     name: pypi
     url: https://pypi.org/project/hydra-repo-syncer/
@@ -83,7 +92,7 @@ publish:
     GITLAB_OIDC_TOKEN:
       aud: https://iam.googleapis.com/projects/${GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${GCP_WIF_POOL}/providers/${GCP_WIF_PROVIDER}
   script:
-    - apt-get update && apt-get install -y --no-install-recommends curl jq ca-certificates
+    - apt-get update && apt-get install -y --no-install-recommends jq
     - pip install twine
 
     # 1. Save GitLab's OIDC JWT
