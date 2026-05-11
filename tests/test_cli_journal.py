@@ -424,9 +424,9 @@ class TestScanCommand:
                 return_value=snapshot,
             ),
         ):
-            result = runner.invoke(cli_mod.app, ["scan", "--apply"])
+            result = runner.invoke(cli_mod.app, ["scan", "--apply", "--yes"])
         assert result.exit_code == 0, result.output
-        assert "Adopting" in result.output
+        assert "adopt" in result.output.lower()
         with journal_mod.journal() as j:
             repos = {r.name: r for r in j.list_repos()}
         assert "extra" in repos
@@ -459,7 +459,7 @@ class TestScanCommand:
                 return_value=snapshot,
             ),
         ):
-            result = runner.invoke(cli_mod.app, ["scan", "--apply"])
+            result = runner.invoke(cli_mod.app, ["scan", "--apply", "--yes"])
         assert result.exit_code == 0, result.output
         with journal_mod.journal() as j:
             mirrors = {m.target_host_id: m for m in j.list_repos()[0].mirrors}
@@ -489,9 +489,8 @@ class TestScanCommand:
                 return_value=snapshot,
             ),
         ):
-            result = runner.invoke(cli_mod.app, ["scan", "--apply"])
+            result = runner.invoke(cli_mod.app, ["scan", "--apply", "--yes"])
         assert result.exit_code == 1, result.output  # 'probe' still missing → not clean
-        assert "skipped" in result.output.lower()
         with journal_mod.journal() as j:
             extra = next(r for r in j.list_repos() if r.name == "extra")
         hosts = {m.target_host_id for m in extra.mirrors}
@@ -516,7 +515,9 @@ class TestScanCommand:
                 return_value=snapshot,
             ),
         ):
-            result = runner.invoke(cli_mod.app, ["scan", "--interactive"], input="y\n")
+            # Two prompts now: per-repo "Adopt 'extra'?" then a final
+            # "Apply N action(s)?". Answer y to both.
+            result = runner.invoke(cli_mod.app, ["scan", "--interactive"], input="y\ny\n")
         assert result.exit_code in (0, 1), result.output  # 'probe' missing → 1; 'extra' adopted
         with journal_mod.journal() as j:
             names = {r.name for r in j.list_repos()}

@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import json
 
-import requests
-
 from hydra.errors import raise_for_response
+from hydra.gitlab import _session
 
 
 def create_repo(
@@ -29,7 +28,7 @@ def create_repo(
         url = f"{base_url}/user/repos"
         action = f"creating repo '{name}' under user account"
 
-    response = requests.post(url, headers=headers, data=body)
+    response = _session().post(url, headers=headers, data=body)
     raise_for_response(response, host="github", action=action, host_url=base_url)
     return response.json()["clone_url"]
 
@@ -40,7 +39,7 @@ def verify_token(*, base_url: str, token: str) -> None:
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github+json",
     }
-    response = requests.get(f"{base_url}/user", headers=headers)
+    response = _session().get(f"{base_url}/user", headers=headers)
     raise_for_response(response, host="github", action="verifying token", host_url=base_url)
 
 
@@ -57,7 +56,7 @@ def inspect_token(*, base_url: str, token: str):
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github+json",
     }
-    response = requests.get(f"{base_url}/user", headers=headers)
+    response = _session().get(f"{base_url}/user", headers=headers)
     raise_for_response(response, host="github", action="inspecting token", host_url=base_url)
     raw = response.headers.get("X-OAuth-Scopes", "")
     scopes = [s.strip() for s in raw.split(",") if s.strip()]

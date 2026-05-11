@@ -128,5 +128,5 @@ class MirrorSource(Provider, Protocol):
     def list_mirrors(self, *, token: str, primary_repo: RepoRef) -> List[MirrorInfo]: ...
 
     def list_projects_with_mirrors(
-        self, *, token: str, namespace: Optional[str]
+        self, *, token: str, namespace: Optional[str], max_workers: int = 8
     ) -> List[PrimaryProject]: ...

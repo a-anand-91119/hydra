@@ -4,9 +4,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse, urlunparse
 
-import requests
-
 from hydra.errors import raise_for_response
+from hydra.gitlab import _session
 
 
 @dataclass
@@ -64,7 +63,7 @@ def add_mirror(
 ) -> Dict[str, Any]:
     headers = {"PRIVATE-TOKEN": token}
     data = {"url": mirror_url, "enabled": True, "only_protected_branches": False}
-    response = requests.post(
+    response = _session().post(
         f"{base_url}/api/v4/projects/{project_id}/remote_mirrors",
         headers=headers,
         data=data,
@@ -80,7 +79,7 @@ def add_mirror(
 
 def list_mirrors(*, host_id: str, base_url: str, token: str, project_id: int) -> List[Mirror]:
     headers = {"PRIVATE-TOKEN": token}
-    response = requests.get(
+    response = _session().get(
         f"{base_url}/api/v4/projects/{project_id}/remote_mirrors", headers=headers
     )
     raise_for_response(
@@ -112,7 +111,7 @@ def delete_mirror(
 ) -> None:
     """Remove a push-mirror by id. GitLab returns 204 No Content on success."""
     headers = {"PRIVATE-TOKEN": token}
-    response = requests.delete(
+    response = _session().delete(
         f"{base_url}/api/v4/projects/{project_id}/remote_mirrors/{mirror_id}",
         headers=headers,
     )
@@ -129,7 +128,7 @@ def delete_mirror(
 def find_project_id(*, host_id: str, base_url: str, token: str, repo_path: str) -> Optional[int]:
     headers = {"PRIVATE-TOKEN": token}
     encoded = quote(repo_path, safe="")
-    response = requests.get(f"{base_url}/api/v4/projects/{encoded}", headers=headers)
+    response = _session().get(f"{base_url}/api/v4/projects/{encoded}", headers=headers)
     if response.status_code == 200:
         return response.json().get("id")
     if response.status_code == 404:

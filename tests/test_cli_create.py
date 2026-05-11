@@ -173,16 +173,20 @@ class TestExecuteCreatePartialFailure:
         assert "github boom" in out
         assert "self_hosted_gitlab repo" in out
         assert "gitlab repo" in out
-        # mirrors never reached
-        patches["mi_add"].assert_not_called()
+        # The plan interleaves mirror setup with each fork, so the gitlab.com
+        # fork's mirror is added before github's create_repo runs. Confirm the
+        # one completed mirror is reported as an orphan.
+        assert patches["mi_add"].call_count == 1
+        assert "mirror → gitlab" in out
 
     def test_partial_mirror_failure_lists_succeeded_mirrors(self, cfg, opts, console, patches):
         import typer
 
         _stub_happy(patches)
-        # First mirror succeeds, second fails.
+        # The plan order is: gitlab fork repo → gitlab mirror → github fork
+        # repo → github mirror. Make github's mirror call fail.
         patches["mi_add"].side_effect = [
-            {},
+            {"id": 7001},
             HydraAPIError(message="mirror boom", hint=""),
         ]
 
@@ -191,8 +195,72 @@ class TestExecuteCreatePartialFailure:
 
         out = console.export_text()
         assert "mirror boom" in out
-        # The first fork's mirror succeeded — must be reported
-        assert "mirrors configured for: gitlab" in out
+        # The first fork's mirror succeeded — its orphan entry surfaces in
+        # the partial-progress block.
+        assert "mirror → gitlab" in out
+
+
+class TestDryRunAndConfirm:
+    """End-to-end CLI behavior for --dry-run / --yes / declined confirm."""
+
+    def _setup(self, patches):
+        # Stubs return well-formed URLs so the mirror credential-injection
+        # path doesn't blow up; dry-run shouldn't reach them, but the
+        # confirm-yes test does.
+        patches["gl_groups"].side_effect = lambda **kw: GroupResolution(
+            group_id=1, created_paths=[]
+        )
+        patches["gl_create"].side_effect = lambda **kw: CreatedRepo(
+            http_url="https://gl.example/team/probe.git", project_id=1
+        )
+        patches["gh_create"].return_value = "https://github.com/me/probe.git"
+        patches["mi_add"].return_value = {"id": 1}
+
+    def test_dry_run_makes_no_provider_calls(self, cfg, console, patches, monkeypatch):
+        from typer.testing import CliRunner
+
+        from hydra import cli as cli_mod
+
+        self._setup(patches)
+        monkeypatch.setattr(cli_mod, "_load_or_die", lambda *a, **k: cfg)
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.app, ["create", "probe", "--dry-run"])
+        assert result.exit_code == 0, result.output
+        patches["gl_create"].assert_not_called()
+        patches["gh_create"].assert_not_called()
+        patches["mi_add"].assert_not_called()
+
+    def test_decline_confirm_aborts(self, cfg, console, patches, monkeypatch):
+        from typer.testing import CliRunner
+
+        from hydra import cli as cli_mod
+
+        self._setup(patches)
+        monkeypatch.setattr(cli_mod, "_load_or_die", lambda *a, **k: cfg)
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.app, ["create", "probe"], input="n\n")
+        assert result.exit_code == 0, result.output
+        assert "No changes made" in result.output
+        patches["gl_create"].assert_not_called()
+
+    def test_yes_skips_prompt(self, cfg, console, patches, monkeypatch):
+        from typer.testing import CliRunner
+
+        from hydra import cli as cli_mod
+
+        self._setup(patches)
+        # Distinct ids per call so journal stitching works.
+        patches["gl_create"].side_effect = [
+            CreatedRepo(http_url="https://a.example/probe.git", project_id=11),
+            CreatedRepo(http_url="https://b.example/probe.git", project_id=22),
+        ]
+        patches["mi_add"].side_effect = [{"id": 91}, {"id": 92}]
+        monkeypatch.setattr(cli_mod, "_load_or_die", lambda *a, **k: cfg)
+        # patches["..."] already stubs secrets.get_token via hydra.cli.secrets_mod
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.app, ["create", "probe", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert patches["gl_create"].call_count >= 1
 
 
 class TestNForks:

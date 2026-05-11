@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 from urllib.parse import quote
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from hydra.errors import raise_for_response
 from hydra.utils import create_slug
+
+DEFAULT_MAX_WORKERS = 8
 
 
 @dataclass
@@ -43,6 +49,37 @@ class GroupResolution:
     created_paths: list[str] = field(default_factory=list)
 
 
+# ── Shared HTTP session with retry ───────────────────────────────────────
+#
+# One ``requests.Session`` per thread (created lazily) wraps every GitLab
+# call. Idempotent verbs (GET/HEAD) get transparent retries on 429/5xx; POST
+# and DELETE never retry — at-most-once semantics for mutations.
+
+_thread_local = threading.local()
+
+
+def _build_retry() -> Retry:
+    return Retry(
+        total=3,
+        backoff_factor=0.3,
+        status_forcelist=(429, 502, 503, 504),
+        allowed_methods=frozenset(["GET", "HEAD"]),
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+
+
+def _session() -> requests.Session:
+    s = getattr(_thread_local, "session", None)
+    if s is None:
+        s = requests.Session()
+        adapter = HTTPAdapter(pool_connections=16, pool_maxsize=32, max_retries=_build_retry())
+        s.mount("http://", adapter)
+        s.mount("https://", adapter)
+        _thread_local.session = s
+    return s
+
+
 def create_repo(
     *,
     host: str,
@@ -62,7 +99,7 @@ def create_repo(
     if namespace_id is not None:
         data["namespace_id"] = namespace_id
 
-    response = requests.post(f"{base_url}/api/v4/projects", headers=headers, data=data)
+    response = _session().post(f"{base_url}/api/v4/projects", headers=headers, data=data)
     raise_for_response(response, host=host, action=f"creating repo '{name}'", host_url=base_url)
     payload = response.json()
     return CreatedRepo(http_url=payload["http_url_to_repo"], project_id=payload["id"])
@@ -95,7 +132,7 @@ def get_or_create_group_path(
 
         slug = create_slug(component, add_timestamp)
 
-        search_resp = requests.get(
+        search_resp = _session().get(
             f"{base_url}/api/v4/groups",
             headers=headers,
             params={"search": component, "per_page": 100},
@@ -117,7 +154,7 @@ def get_or_create_group_path(
         if parent_id is not None:
             data["parent_id"] = parent_id
 
-        create_resp = requests.post(f"{base_url}/api/v4/groups", headers=headers, data=data)
+        create_resp = _session().post(f"{base_url}/api/v4/groups", headers=headers, data=data)
         raise_for_response(
             create_resp,
             host=host,
@@ -141,7 +178,7 @@ def _find_group(groups: list[dict], name: str, parent_id: int | None) -> int | N
 def verify_token(*, host: str, base_url: str, token: str) -> None:
     """Probe the host with the new token to confirm it works. Raises HydraAPIError on failure."""
     headers = {"PRIVATE-TOKEN": token}
-    response = requests.get(f"{base_url}/api/v4/user", headers=headers)
+    response = _session().get(f"{base_url}/api/v4/user", headers=headers)
     raise_for_response(response, host=host, action="verifying token", host_url=base_url)
 
 
@@ -155,10 +192,10 @@ def inspect_token(*, host: str, base_url: str, token: str):
     from hydra.secrets import TokenScopes
 
     headers = {"PRIVATE-TOKEN": token}
-    resp = requests.get(f"{base_url}/api/v4/personal_access_tokens/self", headers=headers)
+    resp = _session().get(f"{base_url}/api/v4/personal_access_tokens/self", headers=headers)
     if resp.status_code == 404:
         # Older GitLab: fall back to /user just to confirm validity.
-        fb = requests.get(f"{base_url}/api/v4/user", headers=headers)
+        fb = _session().get(f"{base_url}/api/v4/user", headers=headers)
         raise_for_response(fb, host=host, action="inspecting token (fallback)", host_url=base_url)
         return TokenScopes(scopes=[], expires_at=None, scopes_known=False)
     raise_for_response(resp, host=host, action="inspecting token", host_url=base_url)
@@ -176,6 +213,7 @@ def list_projects_with_mirrors(
     base_url: str,
     token: str,
     namespace: Optional[str],
+    max_workers: int = DEFAULT_MAX_WORKERS,
 ) -> List[GitLabProjectSummary]:
     """Enumerate projects on the primary that have at least one push-mirror.
 
@@ -183,34 +221,45 @@ def list_projects_with_mirrors(
     subgroups). Without a namespace, fall back to the token's accessible
     projects via ``/projects?membership=true`` — which can be expensive on
     large self-hosted instances, so prefer scoping by namespace when possible.
+
+    Per-project ``/remote_mirrors`` calls run concurrently (up to ``max_workers``
+    threads); pages are also fanned out when GitLab reports ``X-Total-Pages``.
     """
     headers = {"PRIVATE-TOKEN": token}
-    projects = _list_projects(host=host, base_url=base_url, headers=headers, namespace=namespace)
+    projects = _list_projects(
+        host=host,
+        base_url=base_url,
+        headers=headers,
+        namespace=namespace,
+        max_workers=max_workers,
+    )
 
+    # Map project-id → fetched mirrors (or None if forbidden / skipped).
+    results: Dict[int, Optional[List[GitLabMirrorSummary]]] = {}
+
+    def fetch(pid: int) -> Optional[List[GitLabMirrorSummary]]:
+        return _fetch_project_mirrors(host=host, base_url=base_url, headers=headers, project_id=pid)
+
+    pids = [int(p["id"]) for p in projects if p.get("id") is not None]
+    workers = max(1, min(max_workers, len(pids))) if pids else 1
+    if workers <= 1 or len(pids) <= 1:
+        for pid in pids:
+            results[pid] = fetch(pid)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(fetch, pid): pid for pid in pids}
+            for fut in as_completed(futures):
+                pid = futures[fut]
+                results[pid] = fut.result()
+
+    # Re-assemble in input order so callers see deterministic output.
     out: List[GitLabProjectSummary] = []
     for proj in projects:
         pid = proj.get("id")
         if pid is None:
             continue
-        mirrors_resp = requests.get(
-            f"{base_url}/api/v4/projects/{pid}/remote_mirrors",
-            headers=headers,
-        )
-        if mirrors_resp.status_code == 403:
-            # Not the owner — skip rather than fail the whole scan.
-            continue
-        raise_for_response(
-            mirrors_resp,
-            host=host,
-            action=f"listing mirrors for project {pid}",
-            host_url=base_url,
-        )
-        summaries = [
-            GitLabMirrorSummary(id=int(m["id"]), url=m.get("url", ""))
-            for m in mirrors_resp.json()
-            if "id" in m
-        ]
-        if not summaries:
+        mirrors = results.get(int(pid))
+        if not mirrors:
             continue
         out.append(
             GitLabProjectSummary(
@@ -218,10 +267,32 @@ def list_projects_with_mirrors(
                 web_url=proj.get("web_url", ""),
                 name=proj.get("name", ""),
                 full_path=proj.get("path_with_namespace", ""),
-                mirrors=summaries,
+                mirrors=mirrors,
             )
         )
     return out
+
+
+def _fetch_project_mirrors(
+    *, host: str, base_url: str, headers: dict, project_id: int
+) -> Optional[List[GitLabMirrorSummary]]:
+    """Fetch one project's remote mirrors. Returns None on 403 (skip)."""
+    resp = _session().get(
+        f"{base_url}/api/v4/projects/{project_id}/remote_mirrors",
+        headers=headers,
+    )
+    if resp.status_code == 403:
+        # Not the owner — skip rather than fail the whole scan.
+        return None
+    raise_for_response(
+        resp,
+        host=host,
+        action=f"listing mirrors for project {project_id}",
+        host_url=base_url,
+    )
+    return [
+        GitLabMirrorSummary(id=int(m["id"]), url=m.get("url", "")) for m in resp.json() if "id" in m
+    ]
 
 
 def _list_projects(
@@ -230,6 +301,7 @@ def _list_projects(
     base_url: str,
     headers: dict,
     namespace: Optional[str],
+    max_workers: int = DEFAULT_MAX_WORKERS,
 ) -> List[dict]:
     """Return all visible projects in a namespace (recursive), or membership-scoped if none."""
     if namespace:
@@ -239,24 +311,74 @@ def _list_projects(
     else:
         endpoint = f"{base_url}/api/v4/projects"
         params = {"membership": "true", "per_page": 100, "archived": "false"}
-    return _paginate(host=host, endpoint=endpoint, headers=headers, params=params)
+    return _paginate(
+        host=host,
+        endpoint=endpoint,
+        headers=headers,
+        params=params,
+        max_workers=max_workers,
+    )
 
 
-def _paginate(*, host: str, endpoint: str, headers: dict, params: dict) -> List[dict]:
-    out: List[dict] = []
-    page = 1
-    while True:
+def _paginate(
+    *,
+    host: str,
+    endpoint: str,
+    headers: dict,
+    params: dict,
+    max_workers: int = DEFAULT_MAX_WORKERS,
+) -> List[dict]:
+    """Walk a GitLab paginated endpoint.
+
+    Fans out pages 2..N when ``X-Total-Pages`` is present (offset pagination);
+    falls back to sequential ``X-Next-Page`` walking otherwise (keyset endpoints
+    or any GitLab version that drops the total header).
+    """
+    page1_params = dict(params)
+    page1_params["page"] = 1
+    page1_params.setdefault("per_page", 100)
+    resp = _session().get(endpoint, headers=headers, params=page1_params)
+    raise_for_response(resp, host=host, action="listing projects", host_url=endpoint)
+    items = list(resp.json())
+
+    total_pages_raw = resp.headers.get("X-Total-Pages", "").strip()
+    if total_pages_raw and total_pages_raw.isdigit() and int(total_pages_raw) > 1:
+        total = int(total_pages_raw)
+        page_numbers = list(range(2, total + 1))
+        workers = max(1, min(max_workers, len(page_numbers)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            future_to_page = {
+                ex.submit(_fetch_page, host, endpoint, headers, params, n): n for n in page_numbers
+            }
+            pages: Dict[int, List[dict]] = {}
+            for fut in as_completed(future_to_page):
+                pages[future_to_page[fut]] = fut.result()
+        for n in sorted(pages):
+            items.extend(pages[n])
+        return items
+
+    # Fallback: walk via X-Next-Page (keyset / total-pages-absent case).
+    next_page = resp.headers.get("X-Next-Page", "").strip()
+    while next_page:
         page_params = dict(params)
-        page_params["page"] = page
-        resp = requests.get(endpoint, headers=headers, params=page_params)
+        page_params["page"] = int(next_page)
+        page_params.setdefault("per_page", 100)
+        resp = _session().get(endpoint, headers=headers, params=page_params)
         raise_for_response(resp, host=host, action="listing projects", host_url=endpoint)
-        items = resp.json()
-        if not items:
+        chunk = resp.json()
+        if not chunk:
             break
-        out.extend(items)
-        # GitLab returns X-Next-Page; empty when on the last page.
+        items.extend(chunk)
         next_page = resp.headers.get("X-Next-Page", "").strip()
-        if not next_page:
-            break
-        page = int(next_page)
-    return out
+    return items
+
+
+def _fetch_page(
+    host: str, endpoint: str, headers: dict, base_params: dict, page: int
+) -> List[dict]:
+    page_params = dict(base_params)
+    page_params["page"] = page
+    page_params.setdefault("per_page", 100)
+    resp = _session().get(endpoint, headers=headers, params=page_params)
+    raise_for_response(resp, host=host, action="listing projects", host_url=endpoint)
+    return list(resp.json())

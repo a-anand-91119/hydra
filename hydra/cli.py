@@ -4,6 +4,7 @@ import copy
 import fnmatch
 import json as json_mod
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -13,7 +14,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
-from hydra import __version__
+from hydra import __version__, executor, planner
 from hydra import doctor as doctor_mod
 from hydra import journal as journal_mod
 from hydra import paths as paths_mod
@@ -138,6 +139,9 @@ def create(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Print planned actions without making API calls"
     ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation before applying the plan."
+    ),
     config_path: Optional[Path] = typer.Option(None, "--config"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
@@ -167,128 +171,43 @@ def create(
             dry_run=dry_run,
         )
 
+    plan = planner.plan_create(cfg, opts)
+    planner.render_plan(plan, console, dry_run=opts.dry_run, title=f"Create '{opts.name}'")
+
     if opts.dry_run:
-        _print_dry_run(cfg, opts)
+        return
+
+    if not yes and not typer.confirm(f"Apply {len(plan.actions)} action(s)?", default=False):
+        console.print("[dim]No changes made.[/dim]")
         return
 
     _execute_create(cfg=cfg, opts=opts, verbose=verbose, console=console)
 
 
-def _print_dry_run(cfg: Config, opts: CreateOptions) -> None:
-    primary = cfg.primary_host()
-    typer.echo(f"[dry-run] would create '{opts.name}' on:")
-    typer.echo(f"  primary  · {primary.id} ({primary.url}) (group={opts.group or 'none'})")
-    for fork in cfg.fork_hosts():
-        typer.echo(f"  fork     · {fork.id} ({fork.url})")
-    typer.echo(f"  visibility: {'private' if opts.is_private else 'public'}")
-    typer.echo(f"  mirror: {'yes' if opts.mirror else 'no'}")
-
-
 def _execute_create(*, cfg: Config, opts: CreateOptions, verbose: bool, console: Console) -> None:
+    """Build a create plan and apply it. Token resolution + error rendering
+    happen here so the CLI command stays focused on plan/render/confirm.
+
+    Kept as a public-by-convention helper so existing tests (and the wizard
+    callback) can drive the apply without re-prompting.
+    """
     primary_spec = cfg.primary_host()
     fork_specs = cfg.fork_hosts()
-
-    primary = providers_mod.get(primary_spec.kind)(primary_spec)
-    forks = [(spec, providers_mod.get(spec.kind)(spec)) for spec in fork_specs]
-
-    primary_token = _resolve_token_or_die(primary_spec.id, allow_prompt=True, console=console)
-    fork_tokens: Dict[str, str] = {
-        spec.id: _resolve_token_or_die(spec.id, allow_prompt=True, console=console)
-        for spec in fork_specs
+    tokens: Dict[str, str] = {
+        primary_spec.id: _resolve_token_or_die(primary_spec.id, allow_prompt=True, console=console)
     }
+    for spec in fork_specs:
+        if spec.id not in tokens:
+            tokens[spec.id] = _resolve_token_or_die(spec.id, allow_prompt=True, console=console)
 
-    created: List[Tuple[str, str]] = []
-    primary_repo: Optional[RepoRef] = None
-    journal_repo_id: Optional[int] = None
-
-    try:
-        ns = primary.ensure_namespace(group_path=opts.group or None, token=primary_token)
-        for path in ns.created_paths:
-            created.append((f"{primary_spec.id} group", f"{primary_spec.url}/{path}"))
-
-        primary_repo = primary.create_repo(
-            token=primary_token,
-            name=opts.name,
-            description=opts.description,
-            namespace=ns,
-            is_private=opts.is_private,
-        )
-        created.append((f"{primary_spec.id} repo", primary_repo.http_url))
-        console.print(f"[green]✓[/green] {primary_spec.id}: {primary_repo.http_url}")
-
-        if verbose and ns.namespace_id is not None:
-            console.print(f"[dim]{primary_spec.id} group id: {ns.namespace_id}[/dim]")
-
-        if primary_repo.project_id is not None:
-            journal_repo_id = _journal_record_repo(
-                console,
-                name=opts.name,
-                primary_host_id=primary_spec.id,
-                primary_repo_id=primary_repo.project_id,
-                primary_repo_url=primary_repo.http_url,
-            )
-
-        fork_repos: List[Tuple[HostSpec, Any, RepoRef]] = []
-        for spec, prov in forks:
-            tok = fork_tokens[spec.id]
-            f_ns = prov.ensure_namespace(group_path=opts.group or None, token=tok)
-            for path in f_ns.created_paths:
-                created.append((f"{spec.id} group", f"{spec.url}/{path}"))
-            f_repo = prov.create_repo(
-                token=tok,
-                name=opts.name,
-                description=opts.description,
-                namespace=f_ns,
-                is_private=opts.is_private,
-            )
-            created.append((f"{spec.id} repo", f_repo.http_url))
-            console.print(f"[green]✓[/green] {spec.id}: {f_repo.http_url}")
-            fork_repos.append((spec, prov, f_repo))
-
-        if opts.mirror:
-            # Config validation already enforces this, but assert to satisfy
-            # the type narrowing.
-            assert isinstance(primary, MirrorSource)
-            mirrored: List[str] = []
-            try:
-                for spec, _prov, f_repo in fork_repos:
-                    fork_caps = providers_mod.capabilities_for(spec.kind)
-                    payload = primary.add_outbound_mirror(
-                        token=primary_token,
-                        primary_repo=primary_repo,
-                        target_url=f_repo.http_url,
-                        target_token=fork_tokens[spec.id],
-                        target_username=fork_caps.inbound_mirror_username,
-                        target_label=spec.id,
-                    )
-                    mirrored.append(spec.id)
-                    if journal_repo_id is not None:
-                        push_id = _safe_int(payload.get("id") if payload else None)
-                        if push_id is not None:
-                            _journal_record_mirror(
-                                console,
-                                repo_db_id=journal_repo_id,
-                                target_host_id=spec.id,
-                                target_repo_url=f_repo.http_url,
-                                target_repo_id=(
-                                    str(f_repo.project_id)
-                                    if f_repo.project_id is not None
-                                    else None
-                                ),
-                                push_mirror_id=push_id,
-                            )
-                console.print(
-                    f"[green]✓[/green] mirrors configured: {', '.join(mirrored) or '(none)'}"
-                )
-            except HydraAPIError:
-                if mirrored:
-                    console.print(
-                        f"[yellow]⚠[/yellow] mirrors configured for: {', '.join(mirrored)}"
-                    )
-                raise
-
-    except HydraAPIError as e:
-        _render_api_error(console, e, created)
+    plan = planner.plan_create(cfg, opts)
+    result = executor.apply_plan(plan, cfg=cfg, tokens=tokens, console=console, verbose=verbose)
+    if not result.ok:
+        err = result.error
+        if isinstance(err, HydraAPIError):
+            _render_api_error(console, err, result.created)
+        else:
+            console.print(f"[red]{err}[/red]")
         raise typer.Exit(code=1) from None
 
 
@@ -297,52 +216,6 @@ def _safe_int(value: Any) -> Optional[int]:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
-
-
-def _journal_record_repo(
-    console: Console,
-    *,
-    name: str,
-    primary_host_id: str,
-    primary_repo_id: int,
-    primary_repo_url: str,
-) -> Optional[int]:
-    """Try to record a repo in the journal. Never raises — journal must not
-    break ``create``. Returns the journal row id on success, None on failure.
-    """
-    try:
-        with journal_mod.journal() as j:
-            return j.record_repo(
-                name=name,
-                primary_host_id=primary_host_id,
-                primary_repo_id=primary_repo_id,
-                primary_repo_url=primary_repo_url,
-            )
-    except Exception as e:  # noqa: BLE001 — journal is a side concern
-        console.print(f"[yellow]⚠[/yellow] could not journal repo: {e}")
-        return None
-
-
-def _journal_record_mirror(
-    console: Console,
-    *,
-    repo_db_id: int,
-    target_host_id: str,
-    target_repo_url: str,
-    target_repo_id: Optional[str],
-    push_mirror_id: int,
-) -> None:
-    try:
-        with journal_mod.journal() as j:
-            j.record_mirror(
-                repo_id=repo_db_id,
-                target_host_id=target_host_id,
-                target_repo_url=target_repo_url,
-                target_repo_id=target_repo_id,
-                push_mirror_id=push_mirror_id,
-            )
-    except Exception as e:  # noqa: BLE001
-        console.print(f"[yellow]⚠[/yellow] could not journal mirror for {target_host_id}: {e}")
 
 
 def _render_api_error(console: Console, err: HydraAPIError, created: List[Tuple[str, str]]) -> None:
@@ -569,6 +442,14 @@ def list_repos(
         None, "--filter", help="Filter by repo name (glob: 'foo-*')."
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
+    max_workers: int = typer.Option(
+        8,
+        "--max-workers",
+        envvar="HYDRA_SCAN_WORKERS",
+        min=1,
+        max=32,
+        help="Concurrent HTTP workers for --refresh (default 8).",
+    ),
     config_path: Optional[Path] = typer.Option(None, "--config"),
 ) -> None:
     """List hydra-tracked repos and their last-known mirror status."""
@@ -578,7 +459,7 @@ def list_repos(
     try:
         with journal_mod.journal() as j:
             if refresh:
-                _refresh_status(cfg=cfg, journal=j, console=console)
+                _refresh_status(cfg=cfg, journal=j, console=console, max_workers=max_workers)
             repos = j.list_repos()
     except Exception as e:  # noqa: BLE001
         console.print(f"[red]Could not open journal: {e}[/red]")
@@ -656,9 +537,19 @@ def _repos_to_json(repos: List[journal_mod.JournalRepo]) -> List[Dict[str, Any]]
     ]
 
 
-def _refresh_status(*, cfg: Config, journal: journal_mod.Journal, console: Console) -> None:
+def _refresh_status(
+    *,
+    cfg: Config,
+    journal: journal_mod.Journal,
+    console: Console,
+    max_workers: int = 8,
+) -> None:
     """For each journaled repo on the configured primary, fetch mirror status
-    from the primary and update cached fields."""
+    from the primary and update cached fields.
+
+    Mirror fetches run concurrently across ``max_workers`` threads; journal
+    writes are funnelled back to the main thread to keep SQLite single-writer.
+    """
     primary_spec = cfg.primary_host()
     primary = providers_mod.get(primary_spec.kind)(primary_spec)
     if not isinstance(primary, MirrorSource):
@@ -666,18 +557,31 @@ def _refresh_status(*, cfg: Config, journal: journal_mod.Journal, console: Conso
         return
     token = _resolve_token_or_die(primary_spec.id, allow_prompt=True, console=console)
 
-    for repo in journal.list_repos():
-        if repo.primary_host_id != primary_spec.id:
+    repos = [r for r in journal.list_repos() if r.primary_host_id == primary_spec.id]
+    if not repos:
+        return
+
+    def fetch(repo: journal_mod.JournalRepo):
+        return primary.list_mirrors(
+            token=token,
+            primary_repo=RepoRef(http_url="", project_id=repo.primary_repo_id),
+        )
+
+    workers = max(1, min(max_workers, len(repos)))
+    if workers <= 1:
+        results = [(r, _safe_fetch(fetch, r)) for r in repos]
+    else:
+        results = []
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(_safe_fetch, fetch, r): r for r in repos}
+            for fut in as_completed(futures):
+                results.append((futures[fut], fut.result()))
+
+    for repo, outcome in results:
+        if isinstance(outcome, HydraAPIError):
+            console.print(f"[yellow]⚠ {repo.name}:[/yellow] {outcome.message}")
             continue
-        try:
-            mirrors = primary.list_mirrors(
-                token=token,
-                primary_repo=RepoRef(http_url="", project_id=repo.primary_repo_id),
-            )
-        except HydraAPIError as e:
-            console.print(f"[yellow]⚠ {repo.name}:[/yellow] {e.message}")
-            continue
-        by_push_id = {m.id: m for m in mirrors}
+        by_push_id = {m.id: m for m in outcome}
         for jm in repo.mirrors:
             live = by_push_id.get(jm.push_mirror_id)
             if live is None:
@@ -695,6 +599,18 @@ def _refresh_status(*, cfg: Config, journal: journal_mod.Journal, console: Conso
                 last_update_at=live.last_update_at,
             )
         journal.touch_repo_scanned(repo_db_id=repo.id)
+
+
+def _safe_fetch(fn, repo):
+    """Run ``fn(repo)`` and return its result, or the HydraAPIError it raised.
+
+    Used to ferry per-repo failures back to the main thread without aborting
+    the whole pool.
+    """
+    try:
+        return fn(repo)
+    except HydraAPIError as e:
+        return e
 
 
 @app.command("scan")
@@ -724,6 +640,20 @@ def scan_command(
         "-i",
         help="Prompt y/N for each unknown repo before adopting. Drifted ids "
         "are still auto-resynced (an id change isn't a semantic change).",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the final confirmation before applying the plan.",
+    ),
+    max_workers: int = typer.Option(
+        8,
+        "--max-workers",
+        envvar="HYDRA_SCAN_WORKERS",
+        min=1,
+        max=32,
+        help="Concurrent HTTP workers for scan (default 8).",
     ),
     config_path: Optional[Path] = typer.Option(None, "--config"),
 ) -> None:
@@ -762,7 +692,9 @@ def scan_command(
         raise typer.Exit(code=1) from None
 
     try:
-        snapshot = primary.list_projects_with_mirrors(token=token, namespace=scope)
+        snapshot = primary.list_projects_with_mirrors(
+            token=token, namespace=scope, max_workers=max_workers
+        )
     except HydraAPIError as e:
         _render_api_error(console, e, created=[])
         raise typer.Exit(code=1) from None
@@ -784,6 +716,7 @@ def scan_command(
             by_repo_id=by_repo_id,
             fork_specs=fork_specs,
             interactive=interactive,
+            yes=yes,
         )
 
     # Re-eval state for exit code: if user adopted everything in scope, exit 0.
@@ -943,85 +876,59 @@ def _apply_scan_diff(
     by_repo_id: Dict[int, PrimaryProject],
     fork_specs: List[HostSpec],
     interactive: bool,
+    yes: bool = False,
 ) -> bool:
-    """Adopt unknown repos + resync drifted push_mirror_ids.
+    """Adopt unknown repos + resync drifted push_mirror_ids via the planner.
+
+    With ``--interactive``, prompt per unknown repo to filter the plan first.
+    Drift actions are always included — an id change is not semantic. After
+    filtering, render the final plan, prompt once (unless ``--yes``), then
+    apply through the executor.
 
     Returns True if the journal was written to at least once.
     """
-    primary_host_id = cfg.primary
-    mutated = False
+    accepted_ids: Optional[List[int]] = None
+    if interactive and diff.unknown:
+        accepted_ids = []
+        for snap in diff.unknown:
+            proj = by_repo_id.get(snap.repo_id)
+            if proj is None:
+                continue
+            label = proj.name or proj.full_path or proj.web_url
+            console.print()
+            console.print(f"  [bold]{label}[/bold]  [dim]{proj.web_url}[/dim]")
+            console.print(f"    {_mirror_summary(proj.mirrors, fork_specs)}")
+            for m in proj.mirrors:
+                console.print(f"      → {_render_mirror_line(m.url, m.id, fork_specs)}")
+            if typer.confirm(f"  Adopt '{label}'?", default=True):
+                accepted_ids.append(snap.repo_id)
+            else:
+                console.print(f"  [dim]skipped {label}[/dim]")
 
-    try:
-        with journal_mod.journal() as j:
-            if diff.unknown:
-                console.print()
-                console.print("[bold]Adopting unknown repos:[/bold]")
-                for snap in diff.unknown:
-                    proj = by_repo_id.get(snap.repo_id)
-                    if proj is None:
-                        continue
-                    label = proj.name or proj.full_path or proj.web_url
-                    if interactive:
-                        console.print()
-                        console.print(f"  [bold]{label}[/bold]  [dim]{proj.web_url}[/dim]")
-                        console.print(f"    {_mirror_summary(proj.mirrors, fork_specs)}")
-                        for m in proj.mirrors:
-                            console.print(f"      → {_render_mirror_line(m.url, m.id, fork_specs)}")
-                        if not typer.confirm(f"  Adopt '{label}'?", default=True):
-                            console.print(f"  [dim]skipped {label}[/dim]")
-                            continue
-                    repo_db_id = j.record_repo(
-                        name=label,
-                        primary_host_id=primary_host_id,
-                        primary_repo_id=proj.project_id,
-                        primary_repo_url=proj.web_url,
-                    )
-                    mutated = True
-                    recorded = 0
-                    skipped: List[str] = []
-                    for m in proj.mirrors:
-                        fork = _match_fork(m.url, fork_specs)
-                        if fork is None:
-                            skipped.append(scrub_credentials(m.url))
-                            continue
-                        j.record_mirror(
-                            repo_id=repo_db_id,
-                            target_host_id=fork.id,
-                            target_repo_url=scrub_credentials(m.url),
-                            push_mirror_id=m.id,
-                        )
-                        recorded += 1
-                    note = f"{recorded} mirror(s) journaled"
-                    if skipped:
-                        note += f", {len(skipped)} skipped (no matching fork host)"
-                    console.print(f"  [green]✓[/green] {label} — {note}")
-                    for url in skipped:
-                        console.print(f"      [yellow]skipped:[/yellow] {url}")
+    plan = planner.plan_scan_apply(
+        diff, cfg, by_repo_id=by_repo_id, accept_unknown_ids=accepted_ids
+    )
+    if plan.is_empty:
+        console.print("[dim]Nothing to apply.[/dim]")
+        return False
 
-            if diff.drift:
-                console.print()
-                console.print("[bold]Resyncing drifted push-mirror ids:[/bold]")
-                for jrepo, snap in diff.drift:
-                    proj = by_repo_id.get(snap.repo_id)
-                    if proj is None:
-                        continue
-                    j_by_host = {m.target_host_id: m for m in jrepo.mirrors}
-                    updates = 0
-                    for m in proj.mirrors:
-                        fork = _match_fork(m.url, fork_specs)
-                        if fork is None or fork.id not in j_by_host:
-                            continue
-                        jm = j_by_host[fork.id]
-                        if jm.push_mirror_id == m.id:
-                            continue
-                        j.update_mirror_push_id(mirror_db_id=jm.id, new_push_mirror_id=m.id)
-                        mutated = True
-                        updates += 1
-                    msg = f"  [green]✓[/green] {jrepo.name} — {updates} id update(s)"
-                    console.print(msg)
-    except Exception as e:  # noqa: BLE001 — journal write is best-effort here
-        console.print(f"[red]Journal write failed during --apply: {e}[/red]")
-    return mutated
+    console.print()
+    planner.render_plan(plan, console, title="Scan apply plan")
+    if not yes and not typer.confirm(f"Apply {len(plan.actions)} action(s)?", default=False):
+        console.print("[dim]No changes made.[/dim]")
+        return False
+
+    # Tokens not needed for journal-only actions, but the executor expects a
+    # bag — supply primary's so a future provider-touching action wouldn't
+    # silently misroute.
+    primary_token = _resolve_token_or_die(cfg.primary, allow_prompt=True, console=console)
+    tokens = {cfg.primary: primary_token}
+
+    result = executor.apply_plan(plan, cfg=cfg, tokens=tokens, console=console)
+    if not result.ok:
+        console.print(f"[red]Journal write failed during --apply: {result.error}[/red]")
+        return result.applied > 0
+    return result.applied > 0
 
 
 @app.command("rotate-token", no_args_is_help=True)

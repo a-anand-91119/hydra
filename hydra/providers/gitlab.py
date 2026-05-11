@@ -198,13 +198,14 @@ class GitLabProvider:
         ]
 
     def list_projects_with_mirrors(
-        self, *, token: str, namespace: Optional[str]
+        self, *, token: str, namespace: Optional[str], max_workers: int = 8
     ) -> List[PrimaryProject]:
         raw = gitlab_api.list_projects_with_mirrors(
             host=self.spec.id,
             base_url=self.spec.url,
             token=token,
             namespace=namespace,
+            max_workers=max_workers,
         )
         return [
             PrimaryProject(

@@ -36,8 +36,10 @@ class FakeResponse:
         self,
         status_code: int,
         body: dict | list | str | None = None,
+        headers: dict | None = None,
     ) -> None:
         self.status_code = status_code
+        self.headers = dict(headers or {})
         if isinstance(body, (dict, list)):
             self._payload = body
             self.text = json.dumps(body)
