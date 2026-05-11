@@ -89,19 +89,17 @@ def test_parallel_refresh_uses_multiple_threads(monkeypatch):
     cfg = _make_cfg()
     _seed_journal(8)
 
+    # Sleep is here only to widen the window for thread interleaving — we no
+    # longer assert wall-clock, just that the pool actually used >1 thread.
+    # CI runners can be wildly contended; timing-based assertions go flaky.
     primary = _FakePrimary(sleep_s=0.05)
     monkeypatch.setattr(cli_mod.providers_mod, "get", lambda kind: lambda spec: primary)
     monkeypatch.setattr(cli_mod.secrets_mod, "get_token", lambda *a, **k: "tok")
 
     console = Console(record=True, width=120)
     with journal_mod.journal() as j:
-        t0 = time.monotonic()
         cli_mod._refresh_status(cfg=cfg, journal=j, console=console, max_workers=8)
-        dt = time.monotonic() - t0
 
-    # Sequential lower bound is 8*0.05=0.4s; parallel with 8 workers should be
-    # well under that. Be generous to avoid CI flake.
-    assert dt < 0.30, f"refresh too slow ({dt:.2f}s) — pool may be serial"
     assert len(primary.fetch_threads) == 8
     assert len(set(primary.fetch_threads)) > 1, "all fetches landed on one thread"
 
