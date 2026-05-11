@@ -37,6 +37,7 @@ lint:
 
 unit-tests:
   stage: test
+  needs: []
   script:
     - uv pip install -e '.[dev]'
     - pytest -n auto --cov=hydra --cov-report=term-missing --cov-report=xml --junitxml=report.xml
@@ -55,6 +56,7 @@ unit-tests:
 
 smoke:
   stage: test
+  needs: []
   script:
     - uv pip install -e .
     - python -c "from hydra.cli import app; print('import ok')"
