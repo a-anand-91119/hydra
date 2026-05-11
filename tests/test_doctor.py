@@ -139,6 +139,316 @@ class TestCheckTokenResolvable:
         assert called == []
 
 
+class TestTokenSourceAttribution:
+    def test_shell_env_reported_distinctly(self, v2_path, quiet_console, monkeypatch):
+        monkeypatch.setenv("HYDRA_TOKEN_SELF_HOSTED_GITLAB", "tok")
+        result = run_doctor(config_path=v2_path, console=quiet_console)
+        msgs = [
+            f.message
+            for f in result.report.findings
+            if f.section == "Tokens" and "self_hosted_gitlab" in f.message
+        ]
+        assert any("shell env" in m for m in msgs), msgs
+
+    def test_dotenv_reported_distinctly(self, v2_path, quiet_console, monkeypatch, tmp_path):
+        # The autouse conftest chdirs to a clean dir; write a .env there.
+        (Path.cwd() / ".env").write_text("HYDRA_TOKEN_GITLAB=fromdotenv\n")
+        monkeypatch.delenv("HYDRA_TOKEN_GITLAB", raising=False)
+        result = run_doctor(config_path=v2_path, console=quiet_console)
+        msgs = [
+            f.message
+            for f in result.report.findings
+            if f.section == "Tokens" and "gitlab" in f.message and "self_hosted" not in f.message
+        ]
+        assert any(".env" in m for m in msgs), msgs
+
+    def test_keyring_reported_distinctly(self, v2_path, quiet_console, monkeypatch):
+        for name in (
+            "HYDRA_TOKEN_GITHUB",
+            "HYDRA_GITHUB_TOKEN",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        # Stub keyring directly via the state's keyring_get is harder; easier
+        # to use --check-keyring and patch keyring.get_password.
+        monkeypatch.setattr(
+            "hydra.doctor.checks._safe_keyring_get",
+            lambda host_id: "from-keyring" if host_id == "github" else None,
+        )
+        result = run_doctor(config_path=v2_path, console=quiet_console, check_keyring=True)
+        github_msgs = [
+            f.message
+            for f in result.report.findings
+            if f.section == "Tokens" and "github" in f.message and "GITHUB" not in f.message
+        ]
+        assert any("keyring" in m.lower() for m in github_msgs), github_msgs
+
+    def test_shadowing_warns(self, v2_path, quiet_console, monkeypatch):
+        """Shell env with a DIFFERENT value than .env for the same key → WARN."""
+        (Path.cwd() / ".env").write_text("HYDRA_TOKEN_GITLAB=fromdotenv\n")
+        monkeypatch.setenv("HYDRA_TOKEN_GITLAB", "fromshell")
+        result = run_doctor(config_path=v2_path, console=quiet_console)
+        shadow_warnings = [
+            f
+            for f in result.report.findings
+            if f.section == "Tokens" and f.level is Level.WARN and "shadowing" in f.message.lower()
+        ]
+        assert len(shadow_warnings) == 1, [
+            f.message for f in result.report.findings if f.section == "Tokens"
+        ]
+
+    def test_no_shadow_when_values_match(self, v2_path, quiet_console, monkeypatch):
+        """Same value in shell and .env → no warning."""
+        (Path.cwd() / ".env").write_text("HYDRA_TOKEN_GITLAB=same\n")
+        monkeypatch.setenv("HYDRA_TOKEN_GITLAB", "same")
+        result = run_doctor(config_path=v2_path, console=quiet_console)
+        shadow = [
+            f
+            for f in result.report.findings
+            if f.section == "Tokens" and "shadowing" in f.message.lower()
+        ]
+        assert shadow == []
+
+    def test_dotenv_presence_finding_when_present(self, v2_path, quiet_console):
+        (Path.cwd() / ".env").write_text("HYDRA_TOKEN_GITLAB=x\nUNRELATED=y\n")
+        result = run_doctor(config_path=v2_path, console=quiet_console)
+        presence = [
+            f for f in result.report.findings if f.section == "Tokens" and ".env at" in f.message
+        ]
+        assert len(presence) == 1
+        # The count is HYDRA_* keys only
+        assert "1 HYDRA_* key" in presence[0].message
+
+    def test_dotenv_presence_finding_when_absent(self, v2_path, quiet_console):
+        # Conftest leaves cwd empty by default
+        result = run_doctor(config_path=v2_path, console=quiet_console)
+        absent = [
+            f
+            for f in result.report.findings
+            if f.section == "Tokens" and "no .env in cwd" in f.message
+        ]
+        assert len(absent) == 1
+
+
+class TestCheckTokenPermissions:
+    """`--check-tokens` makes one network call per host; tests stub the probes."""
+
+    def _set_all_env(self, monkeypatch):
+        for name in ("HYDRA_TOKEN_SELF_HOSTED_GITLAB", "HYDRA_TOKEN_GITLAB", "HYDRA_TOKEN_GITHUB"):
+            monkeypatch.setenv(name, "tok")
+
+    def test_disabled_by_default(self, v2_path, quiet_console, monkeypatch):
+        """No network probes happen unless --check-tokens is passed."""
+        self._set_all_env(monkeypatch)
+        called: list = []
+        monkeypatch.setattr(
+            "hydra.gitlab.inspect_token",
+            lambda **kw: called.append(("gl", kw)) or None,
+        )
+        monkeypatch.setattr(
+            "hydra.github.inspect_token",
+            lambda **kw: called.append(("gh", kw)) or None,
+        )
+        run_doctor(config_path=v2_path, console=quiet_console)
+        assert called == []
+
+    def test_valid_token_with_required_scope_is_ok(self, v2_path, quiet_console, monkeypatch):
+        from hydra.secrets import TokenScopes
+
+        self._set_all_env(monkeypatch)
+        monkeypatch.setattr(
+            "hydra.gitlab.inspect_token",
+            lambda **kw: TokenScopes(scopes=["api", "read_repository"], expires_at=None),
+        )
+        monkeypatch.setattr(
+            "hydra.github.inspect_token",
+            lambda **kw: TokenScopes(scopes=["repo", "user"], expires_at=None),
+        )
+        result = run_doctor(config_path=v2_path, console=quiet_console, check_tokens=True)
+        ok = [
+            f.message
+            for f in result.report.findings
+            if f.section == "Tokens" and "valid (scopes:" in f.message
+        ]
+        assert len(ok) == 3, ok
+
+    def test_missing_scope_warns(self, v2_path, quiet_console, monkeypatch):
+        from hydra.secrets import TokenScopes
+
+        self._set_all_env(monkeypatch)
+        monkeypatch.setattr(
+            "hydra.gitlab.inspect_token",
+            lambda **kw: TokenScopes(scopes=["read_repository"], expires_at=None),
+        )
+        monkeypatch.setattr(
+            "hydra.github.inspect_token",
+            lambda **kw: TokenScopes(scopes=["repo"], expires_at=None),
+        )
+        result = run_doctor(config_path=v2_path, console=quiet_console, check_tokens=True)
+        warns = [
+            f
+            for f in result.report.findings
+            if f.section == "Tokens" and f.level is Level.WARN and "missing scope" in f.message
+        ]
+        assert len(warns) == 2  # two GitLab hosts missing 'api'
+        assert all("api" in w.message for w in warns)
+
+    def test_rejected_token_errors(self, v2_path, quiet_console, monkeypatch):
+        from hydra.errors import HydraAPIError
+
+        self._set_all_env(monkeypatch)
+
+        def _reject(**kw):
+            raise HydraAPIError(message="auth failed", status_code=401, hint="rotate")
+
+        monkeypatch.setattr("hydra.gitlab.inspect_token", _reject)
+        monkeypatch.setattr("hydra.github.inspect_token", _reject)
+        result = run_doctor(config_path=v2_path, console=quiet_console, check_tokens=True)
+        errors = [
+            f
+            for f in result.report.findings
+            if f.section == "Tokens" and f.level is Level.ERROR and "rejected" in f.message
+        ]
+        assert len(errors) == 3  # one per host
+
+    def test_unknown_scopes_treated_as_ok(self, v2_path, quiet_console, monkeypatch):
+        """Fine-grained GitHub PAT / older GitLab — token valid but scopes
+        aren't introspectable; doctor should not penalise."""
+        from hydra.secrets import TokenScopes
+
+        self._set_all_env(monkeypatch)
+        monkeypatch.setattr(
+            "hydra.gitlab.inspect_token",
+            lambda **kw: TokenScopes(scopes=[], expires_at=None, scopes_known=False),
+        )
+        monkeypatch.setattr(
+            "hydra.github.inspect_token",
+            lambda **kw: TokenScopes(scopes=[], expires_at=None, scopes_known=False),
+        )
+        result = run_doctor(config_path=v2_path, console=quiet_console, check_tokens=True)
+        non_ok = [
+            f for f in result.report.findings if f.section == "Tokens" and f.level is not Level.OK
+        ]
+        # The probe yields OK for each; the only WARN would be missing scope,
+        # which we explicitly suppress when scopes aren't known.
+        assert not any("missing scope" in f.message for f in non_ok)
+
+    def test_skipped_when_no_token_resolvable(self, v2_path, quiet_console, monkeypatch):
+        """If a host has no token, the permissions check skips it silently —
+        the missing-token warning from check_token_resolvable already covers it."""
+        from hydra.secrets import TokenScopes
+
+        # Only set env for github; gitlab hosts have no resolvable token.
+        monkeypatch.delenv("HYDRA_TOKEN_SELF_HOSTED_GITLAB", raising=False)
+        monkeypatch.delenv("HYDRA_TOKEN_GITLAB", raising=False)
+        monkeypatch.delenv("HYDRA_GITLAB_TOKEN", raising=False)
+        monkeypatch.delenv("HYDRA_SELF_HOSTED_GITLAB_TOKEN", raising=False)
+        monkeypatch.setenv("HYDRA_TOKEN_GITHUB", "tok")
+        probed: list = []
+        monkeypatch.setattr(
+            "hydra.gitlab.inspect_token",
+            lambda **kw: probed.append("gl") or TokenScopes(scopes=["api"]),
+        )
+        monkeypatch.setattr(
+            "hydra.github.inspect_token",
+            lambda **kw: probed.append("gh") or TokenScopes(scopes=["repo"]),
+        )
+        run_doctor(config_path=v2_path, console=quiet_console, check_tokens=True)
+        # GitLab probes skipped (no token); GitHub probed.
+        assert probed == ["gh"]
+
+    def test_github_org_requires_admin_org(self, v2_path, quiet_console, monkeypatch, tmp_path):
+        """When github host has options.org set, doctor must also require an
+        org-management scope; warn if absent."""
+        from hydra.secrets import TokenScopes
+
+        # Override v2_path to set options.org on github
+        cfg_path = tmp_path / "with-org.yaml"
+        cfg_path.write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 2,
+                    "hosts": [
+                        {"id": "self_hosted_gitlab", "kind": "gitlab", "url": "https://gl.x"},
+                        {"id": "gitlab", "kind": "gitlab", "url": "https://gitlab.com"},
+                        {
+                            "id": "github",
+                            "kind": "github",
+                            "url": "https://api.github.com",
+                            "options": {"org": "acme"},
+                        },
+                    ],
+                    "primary": "self_hosted_gitlab",
+                    "forks": ["gitlab", "github"],
+                    "defaults": {"private": True, "group": ""},
+                }
+            )
+        )
+        self._set_all_env(monkeypatch)
+        monkeypatch.setattr(
+            "hydra.gitlab.inspect_token",
+            lambda **kw: TokenScopes(scopes=["api"]),
+        )
+        # GitHub has 'repo' but no admin:org → should warn.
+        monkeypatch.setattr(
+            "hydra.github.inspect_token",
+            lambda **kw: TokenScopes(scopes=["repo"]),
+        )
+        result = run_doctor(config_path=cfg_path, console=quiet_console, check_tokens=True)
+        gh_warns = [
+            f
+            for f in result.report.findings
+            if f.section == "Tokens"
+            and f.level is Level.WARN
+            and "github" in f.message
+            and "missing scope" in f.message
+        ]
+        assert len(gh_warns) == 1
+        assert "admin:org" in gh_warns[0].message
+
+    def test_github_org_accepts_write_org(self, v2_path, quiet_console, monkeypatch, tmp_path):
+        """write:org is an acceptable substitute for admin:org."""
+        from hydra.secrets import TokenScopes
+
+        cfg_path = tmp_path / "with-org.yaml"
+        cfg_path.write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 2,
+                    "hosts": [
+                        {"id": "self_hosted_gitlab", "kind": "gitlab", "url": "https://gl.x"},
+                        {"id": "gitlab", "kind": "gitlab", "url": "https://gitlab.com"},
+                        {
+                            "id": "github",
+                            "kind": "github",
+                            "url": "https://api.github.com",
+                            "options": {"org": "acme"},
+                        },
+                    ],
+                    "primary": "self_hosted_gitlab",
+                    "forks": ["gitlab", "github"],
+                    "defaults": {"private": True, "group": ""},
+                }
+            )
+        )
+        self._set_all_env(monkeypatch)
+        monkeypatch.setattr(
+            "hydra.gitlab.inspect_token",
+            lambda **kw: TokenScopes(scopes=["api"]),
+        )
+        monkeypatch.setattr(
+            "hydra.github.inspect_token",
+            lambda **kw: TokenScopes(scopes=["repo", "write:org"]),
+        )
+        result = run_doctor(config_path=cfg_path, console=quiet_console, check_tokens=True)
+        gh = [
+            f
+            for f in result.report.findings
+            if f.section == "Tokens" and "github" in f.message and "valid" in f.message
+        ]
+        assert len(gh) == 1
+        assert "missing scope" not in gh[0].message
+
+
 # ──────────────────────────── --fix flow ────────────────────────────
 
 

@@ -11,6 +11,24 @@ from hydra import providers as _providers  # noqa: E402
 _providers.bootstrap()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_state_paths(tmp_path, monkeypatch):
+    """Pin XDG_STATE_HOME + HYDRA_JOURNAL to per-test tmp dirs, and chdir to a
+    clean working directory.
+
+    Stops tests from reading or writing the real ~/.local/state/hydra/journal.db,
+    and prevents doctor from picking up a developer's local .env file.
+    """
+    state_dir = tmp_path / "xdg-state"
+    state_dir.mkdir()
+    cwd_dir = tmp_path / "cwd"
+    cwd_dir.mkdir()
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_dir))
+    monkeypatch.delenv("HYDRA_JOURNAL", raising=False)
+    monkeypatch.chdir(cwd_dir)
+    yield
+
+
 class FakeResponse:
     """Minimal stand-in for requests.Response used by error tests."""
 

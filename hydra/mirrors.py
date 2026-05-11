@@ -11,6 +11,7 @@ from hydra.errors import raise_for_response
 
 @dataclass
 class Mirror:
+    id: int
     url: str
     enabled: bool
     last_update_status: Optional[str]
@@ -90,6 +91,7 @@ def list_mirrors(*, host_id: str, base_url: str, token: str, project_id: int) ->
     )
     return [
         Mirror(
+            id=int(m.get("id", 0)),
             url=m.get("url", ""),
             enabled=bool(m.get("enabled")),
             last_update_status=m.get("last_update_status"),
@@ -98,6 +100,30 @@ def list_mirrors(*, host_id: str, base_url: str, token: str, project_id: int) ->
         )
         for m in response.json()
     ]
+
+
+def delete_mirror(
+    *,
+    host_id: str,
+    base_url: str,
+    token: str,
+    project_id: int,
+    mirror_id: int,
+) -> None:
+    """Remove a push-mirror by id. GitLab returns 204 No Content on success."""
+    headers = {"PRIVATE-TOKEN": token}
+    response = requests.delete(
+        f"{base_url}/api/v4/projects/{project_id}/remote_mirrors/{mirror_id}",
+        headers=headers,
+    )
+    if response.status_code in (200, 202, 204):
+        return
+    raise_for_response(
+        response,
+        host=host_id,
+        action=f"deleting mirror {mirror_id} on project {project_id}",
+        host_url=base_url,
+    )
 
 
 def find_project_id(*, host_id: str, base_url: str, token: str, repo_path: str) -> Optional[int]:

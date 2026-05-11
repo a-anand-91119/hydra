@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 from rich.console import Console
 
+from hydra import journal as journal_mod
 from hydra.cli import _execute_create
 from hydra.config import Config, Defaults, HostSpec
 from hydra.errors import HydraAPIError
@@ -92,7 +93,8 @@ def _stub_happy(p):
         CreatedRepo(http_url="https://gitlab.com/managed/myteam/probe.git", project_id=888),
     ]
     p["gh_create"].return_value = "https://github.com/me/probe.git"
-    p["mi_add"].return_value = {}
+    # Distinct ids per call so journal rows are uniquely identifiable.
+    p["mi_add"].side_effect = [{"id": 7001}, {"id": 7002}]
 
 
 class TestExecuteCreateHappyPath:
@@ -132,6 +134,29 @@ class TestExecuteCreateHappyPath:
 
         _execute_create(cfg=cfg, opts=opts, verbose=False, console=console)
         patches["mi_add"].assert_not_called()
+
+    def test_writes_journal_rows(self, cfg, opts, console, patches):
+        """After a successful create, the journal carries one repo row and one
+        mirror row per fork, each tagged with the push_mirror_id returned by
+        the GitLab API."""
+        _stub_happy(patches)
+        _execute_create(cfg=cfg, opts=opts, verbose=False, console=console)
+
+        with journal_mod.journal() as j:
+            repos = j.list_repos()
+
+        assert len(repos) == 1
+        r = repos[0]
+        assert r.name == "probe"
+        assert r.primary_host_id == "self_hosted_gitlab"
+        assert r.primary_repo_id == 999
+        by_host = {m.target_host_id: m for m in r.mirrors}
+        assert set(by_host) == {"gitlab", "github"}
+        # push_mirror_id from add_mirror's payload[id]
+        assert {by_host["gitlab"].push_mirror_id, by_host["github"].push_mirror_id} == {
+            7001,
+            7002,
+        }
 
 
 class TestExecuteCreatePartialFailure:

@@ -28,6 +28,7 @@ def test_status_reconciles_mirror_urls_with_fork_ids(cfg):
     runner = CliRunner()
     mirrors = [
         MirrorInfo(
+            id=1,
             url="https://oauth2:xxx@gitlab.com/managed/foo/probe.git",
             enabled=True,
             last_update_status="success",
@@ -35,6 +36,7 @@ def test_status_reconciles_mirror_urls_with_fork_ids(cfg):
             last_error=None,
         ),
         MirrorInfo(
+            id=2,
             url="https://oauth2:xxx@github.com/me/probe.git",
             enabled=True,
             last_update_status="success",
@@ -42,6 +44,7 @@ def test_status_reconciles_mirror_urls_with_fork_ids(cfg):
             last_error=None,
         ),
         MirrorInfo(
+            id=3,
             url="https://example.org/random.git",
             enabled=False,
             last_update_status=None,
@@ -62,9 +65,11 @@ def test_status_reconciles_mirror_urls_with_fork_ids(cfg):
         result = runner.invoke(cli_mod.app, ["status", "probe"])
 
     assert result.exit_code == 0, result.output
-    # Note: github URL is api.github.com in config but mirror points to github.com,
-    # so the substring match doesn't catch it — that's expected. gitlab.com matches.
+    # api.github.com (config) ↔ github.com (mirror URL) is handled by the
+    # github-kind special case in _spec_mirror_hostname; the third mirror
+    # (example.org) has no matching fork.
     assert "gitlab" in result.output  # the fork id label
+    assert "github" in result.output  # the github fork now matched
     assert "(unconfigured)" in result.output  # third mirror has no matching fork
 
 
@@ -75,6 +80,7 @@ def test_status_scrubs_credentials_from_mirror_url(cfg):
     runner = CliRunner()
     leaky = [
         MirrorInfo(
+            id=99,
             url="https://oauth2:glpat-SECRET-TOKEN-DO-NOT-LEAK@gitlab.com/foo/bar.git",
             enabled=True,
             last_update_status="success",
@@ -172,6 +178,27 @@ class TestMatchFork:
         assert (
             cli_mod._match_fork("https://oauth2:tok@gitlab.com:8443/foo.git", [fork]).id == "cloud"
         )
+
+    def test_github_api_url_matches_git_url(self):
+        """api.github.com (config) ↔ github.com (mirror push URL) — special case
+        for the github kind so scan / status can recognise the fork."""
+        fork = HostSpec(id="gh", kind="github", url="https://api.github.com")
+        assert (
+            cli_mod._match_fork("https://x-access-token:tok@github.com/me/probe.git", [fork]).id
+            == "gh"
+        )
+
+    def test_github_enterprise_uses_configured_hostname(self):
+        """Self-hosted GHE: api URL and git URL share a hostname, no special case."""
+        fork = HostSpec(id="ghe", kind="github", url="https://github.acme.internal")
+        assert (
+            cli_mod._match_fork(
+                "https://x-access-token:tok@github.acme.internal/team/r.git", [fork]
+            ).id
+            == "ghe"
+        )
+        # And api.github.com is not magically accepted for an enterprise host:
+        assert cli_mod._match_fork("https://x-access-token:tok@github.com/me/r.git", [fork]) is None
 
 
 class TestParseHostOptions:

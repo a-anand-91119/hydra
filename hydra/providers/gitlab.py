@@ -4,11 +4,14 @@ from typing import Any, Dict, List, Optional
 
 from hydra import gitlab as gitlab_api
 from hydra import mirrors as mirrors_api
+from hydra.errors import HydraAPIError, MirrorReplaceError
 from hydra.providers.base import (
     Capabilities,
     HostSpec,
     MirrorInfo,
     NamespaceRef,
+    PrimaryMirror,
+    PrimaryProject,
     RepoRef,
 )
 
@@ -105,6 +108,63 @@ class GitLabProvider:
             target_label=target_label,
         )
 
+    def replace_outbound_mirror(
+        self,
+        *,
+        token: str,
+        primary_repo: RepoRef,
+        old_push_mirror_id: int,
+        target_url: str,
+        target_token: str,
+        target_username: str,
+        target_label: str,
+    ) -> Dict[str, Any]:
+        """Rotate a push-mirror's embedded token.
+
+        GitLab's PUT /remote_mirrors does not accept `url`, so the URL
+        (and therefore the token) is immutable on an existing mirror. We
+        DELETE the old mirror and POST a fresh one. Caller must persist
+        the new mirror's id.
+
+        On DELETE failure: raises ``HydraAPIError``; the existing mirror is
+        untouched. On POST failure after DELETE succeeded: raises
+        ``MirrorReplaceError`` — the mirror is now gone on the primary and
+        callers must reflect that in any local state.
+        """
+        if primary_repo.project_id is None:
+            raise ValueError("GitLab mirror requires primary_repo.project_id")
+        mirrors_api.delete_mirror(
+            host_id=self.spec.id,
+            base_url=self.spec.url,
+            token=token,
+            project_id=primary_repo.project_id,
+            mirror_id=old_push_mirror_id,
+        )
+        try:
+            return self.add_outbound_mirror(
+                token=token,
+                primary_repo=primary_repo,
+                target_url=target_url,
+                target_token=target_token,
+                target_username=target_username,
+                target_label=target_label,
+            )
+        except HydraAPIError as e:
+            raise MirrorReplaceError(
+                message=(
+                    f"{e.message} (the existing {target_label} mirror was deleted "
+                    f"but the replacement could not be created)"
+                ),
+                host=e.host,
+                status_code=e.status_code,
+                hint=(
+                    f"The push-mirror to {target_label} is now GONE on the primary. "
+                    f"The repo is no longer mirroring there. Re-add it via "
+                    f"`hydra create` (with a fresh name) or add it manually in the "
+                    f"primary's project settings."
+                ),
+            ) from e
+
     def find_project(self, *, token: str, repo_path: str) -> Optional[RepoRef]:
         pid = mirrors_api.find_project_id(
             host_id=self.spec.id,
@@ -127,6 +187,7 @@ class GitLabProvider:
         )
         return [
             MirrorInfo(
+                id=m.id,
                 url=m.url,
                 enabled=m.enabled,
                 last_update_status=m.last_update_status,
@@ -134,6 +195,26 @@ class GitLabProvider:
                 last_error=m.last_error,
             )
             for m in ms
+        ]
+
+    def list_projects_with_mirrors(
+        self, *, token: str, namespace: Optional[str]
+    ) -> List[PrimaryProject]:
+        raw = gitlab_api.list_projects_with_mirrors(
+            host=self.spec.id,
+            base_url=self.spec.url,
+            token=token,
+            namespace=namespace,
+        )
+        return [
+            PrimaryProject(
+                project_id=p.project_id,
+                web_url=p.web_url,
+                name=p.name,
+                full_path=p.full_path,
+                mirrors=[PrimaryMirror(id=m.id, url=m.url) for m in p.mirrors],
+            )
+            for p in raw
         ]
 
 

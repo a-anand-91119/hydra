@@ -46,6 +46,7 @@ def run_doctor(
     fix: bool = False,
     verbose: bool = False,
     check_keyring: bool = False,
+    check_tokens: bool = False,
     console: Optional[Console] = None,
 ) -> DoctorResult:
     """Run all checks; optionally apply fixes. Pure-ish: returns a result the
@@ -53,11 +54,14 @@ def run_doctor(
 
     `check_keyring` is opt-in because keyring access can block on macOS
     (Keychain prompts the user for permission to read each entry).
+
+    `check_tokens` is opt-in because it makes one network call per host —
+    fine on a desktop, slow/undesirable on a flaky network or in CI.
     """
     console = console or Console()
     cfg_path = resolve_config_path(config_path)
 
-    state = _build_state(cfg_path, check_keyring=check_keyring)
+    state = _build_state(cfg_path, check_keyring=check_keyring, check_tokens=check_tokens)
     report = collect(state)
 
     _render_report(console, report, verbose=verbose)
@@ -95,7 +99,7 @@ def run_doctor(
             console.print(f"  {glyph} [bold]{fix_id}[/]: {outcome.message}")
 
         # Re-run checks against the post-fix state.
-        post_state = _build_state(cfg_path, check_keyring=check_keyring)
+        post_state = _build_state(cfg_path, check_keyring=check_keyring, check_tokens=check_tokens)
         post_report = collect(post_state)
         console.print()
         console.print("[bold]Re-checking after fixes…[/bold]")
@@ -112,7 +116,9 @@ def run_doctor(
     return DoctorResult(report=report, fixes_applied=fixes_applied, exit_code=exit_code)
 
 
-def _build_state(cfg_path: Path, *, check_keyring: bool = False) -> DoctorState:
+def _build_state(
+    cfg_path: Path, *, check_keyring: bool = False, check_tokens: bool = False
+) -> DoctorState:
     raw: Dict = {}
     parse_error: Optional[Exception] = None
     cfg: Optional[Config] = None
@@ -144,13 +150,28 @@ def _build_state(cfg_path: Path, *, check_keyring: bool = False) -> DoctorState:
         except Exception as e:  # noqa: BLE001
             parse_error = e
 
+    dotenv_path = Path.cwd() / ".env"
+    dotenv_exists = dotenv_path.exists()
+    dotenv_values: Dict[str, str] = {}
+    if dotenv_exists:
+        try:
+            from dotenv import dotenv_values as _read_dotenv
+
+            dotenv_values = {k: v for k, v in _read_dotenv(dotenv_path).items() if v is not None}
+        except Exception:  # noqa: BLE001 — best-effort; falls back to empty
+            dotenv_values = {}
+
     return DoctorState(
         cfg_path=cfg_path,
         raw=raw,
         cfg=cfg,
         parse_error=parse_error,
         env=dict(os.environ),
+        dotenv_path=dotenv_path,
+        dotenv_exists=dotenv_exists,
+        dotenv_values=dotenv_values,
         check_keyring=check_keyring,
+        check_tokens=check_tokens,
     )
 
 

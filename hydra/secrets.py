@@ -11,13 +11,29 @@ from __future__ import annotations
 import os
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import keyring
 from dotenv import load_dotenv
 
 KEYRING_SERVICE = "hydra"
+
+
+@dataclass
+class TokenScopes:
+    """What a network probe learned about a token.
+
+    `scopes_known` is False when the host doesn't expose scopes (e.g., GitHub
+    fine-grained PATs return an empty X-OAuth-Scopes header even though they
+    have permissions). In that case `scopes` is empty but the token IS valid.
+    """
+
+    scopes: List[str]
+    expires_at: Optional[str] = None
+    scopes_known: bool = True
+
 
 # Backward-compat env vars only honored when the host id matches one of the
 # legacy three. Any new id gets the modern HYDRA_TOKEN_<UPPER_ID> scheme.

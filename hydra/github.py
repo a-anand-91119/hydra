@@ -32,3 +32,33 @@ def create_repo(
     response = requests.post(url, headers=headers, data=body)
     raise_for_response(response, host="github", action=action, host_url=base_url)
     return response.json()["clone_url"]
+
+
+def verify_token(*, base_url: str, token: str) -> None:
+    """Probe GitHub with the new token. Raises HydraAPIError on failure."""
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    response = requests.get(f"{base_url}/user", headers=headers)
+    raise_for_response(response, host="github", action="verifying token", host_url=base_url)
+
+
+def inspect_token(*, base_url: str, token: str):
+    """Return scopes for a GitHub token.
+
+    Classic PATs surface scopes via the ``X-OAuth-Scopes`` response header.
+    Fine-grained PATs return an empty header — we report ``scopes_known=False``
+    in that case (the token is still valid; permissions just aren't introspectable).
+    """
+    from hydra.secrets import TokenScopes
+
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    response = requests.get(f"{base_url}/user", headers=headers)
+    raise_for_response(response, host="github", action="inspecting token", host_url=base_url)
+    raw = response.headers.get("X-OAuth-Scopes", "")
+    scopes = [s.strip() for s in raw.split(",") if s.strip()]
+    return TokenScopes(scopes=scopes, expires_at=None, scopes_known=bool(scopes))

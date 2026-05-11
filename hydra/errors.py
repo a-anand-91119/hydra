@@ -49,6 +49,13 @@ class HydraAPIError(Exception):
         return self.message
 
 
+class MirrorReplaceError(HydraAPIError):
+    """Raised when a mirror replace operation fails *after* the original
+    mirror was deleted on the primary — the host now has no mirror for that
+    target. Callers should reflect this in the journal so users notice.
+    """
+
+
 def raise_for_response(
     response: requests.Response,
     *,

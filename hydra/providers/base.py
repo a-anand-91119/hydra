@@ -40,11 +40,40 @@ class NamespaceRef:
 
 @dataclass
 class MirrorInfo:
+    id: int
     url: str
     enabled: bool
     last_update_status: Optional[str]
     last_update_at: Optional[str]
     last_error: Optional[str]
+
+
+@dataclass
+class PrimaryMirror:
+    """One outbound push-mirror on a primary host as seen by ``hydra scan``."""
+
+    id: int
+    url: str
+
+
+@dataclass
+class PrimaryProject:
+    """A project on a primary host plus its outbound push-mirrors.
+
+    Returned by ``MirrorSource.list_projects_with_mirrors`` for ``hydra scan``.
+    Only projects with at least one remote mirror are included.
+    """
+
+    project_id: int
+    web_url: str
+    name: str
+    full_path: str
+    mirrors: List[PrimaryMirror]
+
+    @property
+    def mirror_push_ids(self) -> List[int]:
+        """Backwards-compatible accessor used by ``scan_diff``."""
+        return [m.id for m in self.mirrors]
 
 
 @runtime_checkable
@@ -82,6 +111,22 @@ class MirrorSource(Provider, Protocol):
         target_label: str,
     ) -> Dict[str, Any]: ...
 
+    def replace_outbound_mirror(
+        self,
+        *,
+        token: str,
+        primary_repo: RepoRef,
+        old_push_mirror_id: int,
+        target_url: str,
+        target_token: str,
+        target_username: str,
+        target_label: str,
+    ) -> Dict[str, Any]: ...
+
     def find_project(self, *, token: str, repo_path: str) -> Optional[RepoRef]: ...
 
     def list_mirrors(self, *, token: str, primary_repo: RepoRef) -> List[MirrorInfo]: ...
+
+    def list_projects_with_mirrors(
+        self, *, token: str, namespace: Optional[str]
+    ) -> List[PrimaryProject]: ...
