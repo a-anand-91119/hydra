@@ -124,26 +124,35 @@ The wizard collects the repo name, description, group, visibility, GitHub destin
 ### Flags
 
 ```sh
-# Dry-run — recommended for the first try, no API calls
+# Dry-run — recommended for the first try; renders the plan, no API calls
 hydra create my-repo -d "demo" -g platform/services --dry-run
 
-# Real run, using defaults from config.yaml
+# Real run — renders the plan first, then prompts y/N before any mutation
 hydra create my-repo -d "demo" -g platform/services
 
+# Skip the prompt (useful in CI / scripts)
+hydra create my-repo -d "demo" -g platform/services --yes
+
 # Public repo, under a GitHub org, skip mirror setup
-hydra create my-repo --public --github-org acme --no-mirror
+hydra create my-repo --public --host-option github.org=acme --no-mirror
 ```
 
 Omit the name to launch the wizard; pass a name to stay in flag mode.
+
+Every mutating run starts by printing the **plan** — the ordered list of
+namespaces / repos / mirrors / journal entries that would be created. With
+`--dry-run` it stops there. Without it, you get one confirmation prompt
+before any provider call. `--yes` skips the prompt.
 
 | Flag | Meaning |
 | ---- | ------- |
 | `-d`, `--description`   | Repo description |
 | `-g`, `--group`         | Group path on self-hosted GitLab |
 | `--public`              | Create as public (default is private) |
-| `--github-org <name>`   | Create under this GitHub org instead of your user |
+| `--host-option <id.k=v>`| Per-host override, e.g. `github.org=acme` |
 | `--no-mirror`           | Skip push-mirror setup |
-| `--dry-run`             | Print planned actions without making API calls |
+| `--dry-run`             | Print the plan and exit; no API calls |
+| `-y`, `--yes`           | Skip the confirmation prompt |
 | `--config <path>`       | Use a non-default config file |
 | `-v`, `--verbose`       | Print extra detail (group IDs, etc.) |
 
@@ -163,10 +172,15 @@ Shows the enabled state, last-sync status, and any errors per mirror — useful 
 
 | Command | Description |
 | ------- | ----------- |
-| `hydra create [name]` | Create the repo across all three hosts. Without `name`, runs the wizard. |
+| `hydra create [name]` | Create the repo across all three hosts. Without `name`, runs the wizard. Renders a plan + prompts before applying (skip with `--yes`). |
 | `hydra configure`     | Onboarding wizard — config + tokens. |
 | `hydra status <name>` | Show the self-hosted project's mirror state. |
+| `hydra list`          | List journaled repos and last-known mirror status. `--refresh` re-queries the primary (uses `--max-workers`, default 8). |
+| `hydra scan`          | Diff the journal against the primary. `--apply` adopts unknowns and resyncs drifted ids (renders a plan + prompts; skip with `--yes`). `--interactive` filters the plan per-repo first. `--max-workers <N>` controls concurrent HTTP calls (default 8, env `HYDRA_SCAN_WORKERS`). |
+| `hydra rotate-token`  | Rotate a host PAT in the keyring and rewrite every push-mirror that embeds the old token. |
+| `hydra doctor`        | Diagnose configuration, tokens, and topology. `--fix` runs safe migrations. |
 | `hydra config-path`   | Print the resolved config-file path. |
+| `hydra journal-path`  | Print the resolved journal database path. |
 
 Run `hydra <cmd> --help` for full flags.
 
