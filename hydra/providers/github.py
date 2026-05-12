@@ -27,10 +27,26 @@ class GitHubProvider:
     def __init__(self, spec: HostSpec) -> None:
         self.spec = spec
         self.capabilities = CAPABILITIES
+        self._login_cache: Optional[str] = None
 
     def _org(self) -> Optional[str]:
         v = self.spec.options.get("org")
         return v or None
+
+    def _owner(self, token: str) -> str:
+        """Return the org (if configured) or the authenticated user's login.
+
+        Caches the login per-provider-instance so back-to-back probes don't
+        each pay a ``GET /user`` round-trip.
+        """
+        org = self._org()
+        if org:
+            return org
+        if self._login_cache is None:
+            self._login_cache = github_api.get_authenticated_login(
+                base_url=self.spec.url, token=token
+            )
+        return self._login_cache
 
     def ensure_namespace(self, *, group_path: Optional[str], token: str) -> NamespaceRef:
         org = self._org()
@@ -54,6 +70,22 @@ class GitHubProvider:
             is_private=is_private,
         )
         return RepoRef(http_url=url, project_id=None, namespace_path=self._org())
+
+    def find_repo(
+        self, *, token: str, name: str, namespace: Optional[str]
+    ) -> Optional[RepoRef]:
+        # GitHub doesn't use `namespace` — the host's org option determines
+        # the owner. Accept the kwarg to keep the Provider contract uniform.
+        del namespace
+        owner = self._owner(token)
+        if not owner:
+            return None
+        clone_url = github_api.find_repo(
+            base_url=self.spec.url, token=token, owner=owner, name=name
+        )
+        if clone_url is None:
+            return None
+        return RepoRef(http_url=clone_url, project_id=None, namespace_path=owner)
 
 
 def _factory(spec: HostSpec) -> GitHubProvider:

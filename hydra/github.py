@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Optional
 
 from hydra import http
 from hydra.errors import raise_for_response
@@ -41,6 +42,43 @@ def verify_token(*, base_url: str, token: str) -> None:
     }
     response = http.get(f"{base_url}/user", headers=headers)
     raise_for_response(response, host="github", action="verifying token", host_url=base_url)
+
+
+def get_authenticated_login(*, base_url: str, token: str) -> str:
+    """Return the login of the user the token belongs to.
+
+    Used to construct ``/repos/{user}/{name}`` for user-owned repo lookups.
+    Callers should cache the result (one GET per token, not per probe).
+    """
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    response = http.get(f"{base_url}/user", headers=headers)
+    raise_for_response(response, host="github", action="resolving login", host_url=base_url)
+    return str(response.json().get("login") or "")
+
+
+def find_repo(
+    *, base_url: str, token: str, owner: str, name: str
+) -> Optional[str]:
+    """Look up a repo by owner/name. Returns ``clone_url`` on 200, None on 404."""
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    response = http.get(f"{base_url}/repos/{owner}/{name}", headers=headers)
+    if response.status_code == 200:
+        return response.json().get("clone_url")
+    if response.status_code == 404:
+        return None
+    raise_for_response(
+        response,
+        host="github",
+        action=f"looking up repo '{owner}/{name}'",
+        host_url=base_url,
+    )
+    raise AssertionError("unreachable")
 
 
 def inspect_token(*, base_url: str, token: str):

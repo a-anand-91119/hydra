@@ -23,7 +23,7 @@ from rich.table import Table
 
 from hydra.config import Config, HostSpec
 from hydra.journal import ScanDiff
-from hydra.providers.base import PrimaryProject
+from hydra.providers.base import PrimaryMirror, PrimaryProject, RepoRef
 
 if TYPE_CHECKING:
     from hydra.wizard import CreateOptions
@@ -31,7 +31,9 @@ if TYPE_CHECKING:
 ActionKind = Literal[
     "ensure_namespace",
     "create_repo",
+    "skip_create_repo",
     "add_outbound_mirror",
+    "skip_add_mirror",
     "journal_record_repo",
     "journal_record_mirror",
     "journal_update_push_id",
@@ -170,6 +172,63 @@ def plan_create(cfg: Config, opts: CreateOptions) -> Plan:
                 )
             )
     return Plan(actions=actions)
+
+
+def plan_create_with_existing(
+    plan: Plan,
+    *,
+    existing_repos: Dict[str, RepoRef],
+    existing_mirrors: Dict[str, PrimaryMirror] = None,  # type: ignore[assignment]
+) -> Plan:
+    """Rewrite a `create` plan to skip work that already exists.
+
+    For every host in ``existing_repos``, replace its ``create_repo`` action
+    with ``skip_create_repo`` (carrying the existing ``RepoRef`` in the
+    payload). For every fork in ``existing_mirrors``, replace the matching
+    ``add_outbound_mirror`` with ``skip_add_mirror``.
+
+    Other actions (``ensure_namespace``, journal records, etc.) are left
+    untouched — namespaces are idempotent on GitLab and no-ops on GitHub.
+    """
+    existing_mirrors = existing_mirrors or {}
+    out: List[Action] = []
+    for action in plan.actions:
+        if action.kind == "create_repo" and action.host_id in existing_repos:
+            ref = action.payload["ref"]
+            existing = existing_repos[action.host_id]
+            out.append(
+                Action(
+                    kind="skip_create_repo",
+                    host_id=action.host_id,
+                    summary=f"= adopt existing repo on {action.host_id}",
+                    payload={
+                        "ref": ref,
+                        "http_url": existing.http_url,
+                        "project_id": existing.project_id,
+                        "namespace_path": existing.namespace_path,
+                    },
+                )
+            )
+            continue
+        if action.kind == "add_outbound_mirror":
+            target = action.payload.get("target_host_id")
+            if target in existing_mirrors:
+                existing_mirror = existing_mirrors[target]
+                out.append(
+                    Action(
+                        kind="skip_add_mirror",
+                        host_id=action.host_id,
+                        summary=f"= mirror to {target} already configured",
+                        payload={
+                            "target_host_id": target,
+                            "push_mirror_id": existing_mirror.id,
+                            "mirror_url": existing_mirror.url,
+                        },
+                    )
+                )
+                continue
+        out.append(action)
+    return Plan(actions=out)
 
 
 def plan_scan_apply(

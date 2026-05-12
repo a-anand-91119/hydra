@@ -69,6 +69,7 @@ class FakeProvider:
         return {"id": 5000 + len(self.calls)}
 
     # Unused by these tests — kept so isinstance(Provider, MirrorSource) works
+    def find_repo(self, **kwargs): ...  # pragma: no cover
     def replace_outbound_mirror(self, **kwargs): ...  # pragma: no cover
     def find_project(self, **kwargs): ...  # pragma: no cover
     def list_mirrors(self, **kwargs): ...  # pragma: no cover

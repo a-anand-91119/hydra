@@ -224,7 +224,9 @@ class TestDryRunAndConfirm:
         self._setup(patches)
         monkeypatch.setattr(cli_mod, "_load_or_die", lambda *a, **k: cfg)
         runner = CliRunner()
-        result = runner.invoke(cli_mod.app, ["create", "probe", "--dry-run"])
+        result = runner.invoke(
+            cli_mod.app, ["create", "probe", "--dry-run", "--no-probe"]
+        )
         assert result.exit_code == 0, result.output
         patches["gl_create"].assert_not_called()
         patches["gh_create"].assert_not_called()
@@ -238,7 +240,9 @@ class TestDryRunAndConfirm:
         self._setup(patches)
         monkeypatch.setattr(cli_mod, "_load_or_die", lambda *a, **k: cfg)
         runner = CliRunner()
-        result = runner.invoke(cli_mod.app, ["create", "probe"], input="n\n")
+        result = runner.invoke(
+            cli_mod.app, ["create", "probe", "--no-probe"], input="n\n"
+        )
         assert result.exit_code == 0, result.output
         assert "No changes made" in result.output
         patches["gl_create"].assert_not_called()
@@ -259,7 +263,8 @@ class TestDryRunAndConfirm:
         # patches["..."] already stubs secrets.get_token via hydra.cli.secrets_mod
         runner = CliRunner()
         result = runner.invoke(
-            cli_mod.app, ["create", "probe", "--yes", "--skip-preflight"]
+            cli_mod.app,
+            ["create", "probe", "--yes", "--skip-preflight", "--no-probe"],
         )
         assert result.exit_code == 0, result.output
         assert patches["gl_create"].call_count >= 1

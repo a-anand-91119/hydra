@@ -132,12 +132,21 @@ def delete_mirror(
     )
 
 
-def find_project_id(*, host_id: str, base_url: str, token: str, repo_path: str) -> Optional[int]:
+def find_project(
+    *, host_id: str, base_url: str, token: str, repo_path: str
+) -> Optional[Dict[str, Any]]:
+    """Look up a project by path. Returns the raw JSON payload on 200, None on 404.
+
+    Callers typically want one of two fields: ``id`` (used by ``scan`` /
+    rotate-token flows) or ``http_url_to_repo`` (used by ``create`` to adopt
+    an existing repo). The full payload is returned so both consumers can
+    work off a single request.
+    """
     headers = {"PRIVATE-TOKEN": token}
     encoded = quote(repo_path, safe="")
     response = http.get(f"{base_url}/api/v4/projects/{encoded}", headers=headers)
     if response.status_code == 200:
-        return response.json().get("id")
+        return response.json()
     if response.status_code == 404:
         return None
     raise_for_response(
@@ -146,5 +155,14 @@ def find_project_id(*, host_id: str, base_url: str, token: str, repo_path: str) 
         action=f"looking up project '{repo_path}'",
         host_url=base_url,
     )
-    # Unreachable — raise_for_response always raises on non-2xx.
     raise AssertionError("unreachable")
+
+
+def find_project_id(*, host_id: str, base_url: str, token: str, repo_path: str) -> Optional[int]:
+    """Back-compat shim over :func:`find_project` for callers that only need
+    the project id (currently the scan/status lookup paths).
+    """
+    payload = find_project(host_id=host_id, base_url=base_url, token=token, repo_path=repo_path)
+    if payload is None:
+        return None
+    return payload.get("id")

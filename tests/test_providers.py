@@ -115,3 +115,101 @@ class TestGitHubProvider:
 
         assert not isinstance(prov, MirrorSource)
         assert not hasattr(prov, "add_outbound_mirror")
+
+
+class TestFindRepo:
+    """Phase 6: existence-probe used by `hydra create` to detect re-runs."""
+
+    def test_gitlab_find_repo_returns_full_ref(self, monkeypatch):
+        from hydra import mirrors as mirrors_api
+
+        spec = HostSpec(id="gl", kind="gitlab", url="https://gl.example")
+        prov = get("gitlab")(spec)
+
+        captured = {}
+
+        def fake_find_project(*, host_id, base_url, token, repo_path):
+            captured["repo_path"] = repo_path
+            return {"id": 42, "http_url_to_repo": "https://gl.example/team/probe.git"}
+
+        monkeypatch.setattr(mirrors_api, "find_project", fake_find_project)
+        ref = prov.find_repo(token="t", name="probe", namespace="team")
+        assert ref is not None
+        assert ref.project_id == 42
+        assert ref.http_url == "https://gl.example/team/probe.git"
+        assert ref.namespace_path == "team"
+        assert captured["repo_path"] == "team/probe"
+
+    def test_gitlab_find_repo_returns_none_on_404(self, monkeypatch):
+        from hydra import mirrors as mirrors_api
+
+        spec = HostSpec(id="gl", kind="gitlab", url="https://gl.example")
+        prov = get("gitlab")(spec)
+        monkeypatch.setattr(mirrors_api, "find_project", lambda **kw: None)
+        assert prov.find_repo(token="t", name="probe", namespace="team") is None
+
+    def test_gitlab_find_repo_honours_managed_group_prefix(self, monkeypatch):
+        from hydra import mirrors as mirrors_api
+
+        spec = HostSpec(
+            id="gl",
+            kind="gitlab",
+            url="https://gl.example",
+            options={"managed_group_prefix": "managed"},
+        )
+        prov = get("gitlab")(spec)
+
+        captured = {}
+
+        def fake_find_project(**kw):
+            captured["repo_path"] = kw["repo_path"]
+            return None
+
+        monkeypatch.setattr(mirrors_api, "find_project", fake_find_project)
+        prov.find_repo(token="t", name="probe", namespace="team")
+        assert captured["repo_path"] == "managed/team/probe"
+
+    def test_github_find_repo_handles_404(self, monkeypatch):
+        from hydra import github as github_api
+
+        spec = HostSpec(id="gh", kind="github", url="https://api.github.com", options={"org": "acme"})
+        prov = get("github")(spec)
+        monkeypatch.setattr(github_api, "find_repo", lambda **kw: None)
+        assert prov.find_repo(token="t", name="probe", namespace=None) is None
+
+    def test_github_find_repo_uses_org_when_configured(self, monkeypatch):
+        from hydra import github as github_api
+
+        spec = HostSpec(id="gh", kind="github", url="https://api.github.com", options={"org": "acme"})
+        prov = get("github")(spec)
+
+        captured = {}
+
+        def fake_find_repo(*, base_url, token, owner, name):
+            captured["owner"] = owner
+            return "https://github.com/acme/probe.git"
+
+        monkeypatch.setattr(github_api, "find_repo", fake_find_repo)
+        ref = prov.find_repo(token="t", name="probe", namespace=None)
+        assert ref is not None
+        assert ref.http_url == "https://github.com/acme/probe.git"
+        assert captured["owner"] == "acme"
+
+    def test_github_find_repo_caches_user_login(self, monkeypatch):
+        """For user-owned repos, GET /user must only be called once."""
+        from hydra import github as github_api
+
+        spec = HostSpec(id="gh", kind="github", url="https://api.github.com", options={"org": None})
+        prov = get("github")(spec)
+
+        login_calls = {"n": 0}
+
+        def fake_login(*, base_url, token):
+            login_calls["n"] += 1
+            return "octocat"
+
+        monkeypatch.setattr(github_api, "get_authenticated_login", fake_login)
+        monkeypatch.setattr(github_api, "find_repo", lambda **kw: None)
+        prov.find_repo(token="t", name="probe", namespace=None)
+        prov.find_repo(token="t", name="probe2", namespace=None)
+        assert login_calls["n"] == 1

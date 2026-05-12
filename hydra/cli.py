@@ -24,7 +24,7 @@ from hydra import secrets as secrets_mod
 from hydra.config import Config, ConfigError, HostSpec, load_config, resolve_config_path
 from hydra.errors import HydraAPIError, MirrorReplaceError
 from hydra.mirrors import scrub_credentials
-from hydra.providers.base import MirrorSource, PrimaryProject, RepoRef
+from hydra.providers.base import MirrorSource, PrimaryMirror, PrimaryProject, RepoRef
 from hydra.wizard import (
     CreateOptions,
     WizardCancelled,
@@ -149,6 +149,18 @@ def create(
         help="Skip the pre-mutation token-scope probe. Faster but a "
         "wrong-scope token may orphan groups/repos before failing.",
     ),
+    adopt_existing: bool = typer.Option(
+        False,
+        "--adopt-existing",
+        help="If the repo already exists on the primary but the journal "
+        "has no record, adopt it without prompting.",
+    ),
+    no_probe: bool = typer.Option(
+        False,
+        "--no-probe",
+        help="Skip the pre-create existence probe. May lead to 409 errors "
+        "on re-runs; only use for very large fan-outs where the extra GETs hurt.",
+    ),
     config_path: Optional[Path] = typer.Option(None, "--config"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
@@ -179,6 +191,32 @@ def create(
         )
 
     plan = planner.plan_create(cfg, opts)
+
+    # Probe what already exists on each host so re-runs don't 409. The
+    # probe needs tokens; resolve them up-front (same set _execute_create
+    # would resolve anyway).
+    existing_repos: Dict[str, RepoRef] = {}
+    existing_mirrors: Dict[str, PrimaryMirror] = {}
+    if not no_probe:
+        tokens = _resolve_tokens_or_die(cfg, console=console)
+        if not skip_preflight:
+            _preflight_or_die(cfg=cfg, tokens=tokens, console=console)
+        existing_repos, existing_mirrors = _probe_existing_state(
+            cfg=cfg, opts=opts, tokens=tokens, console=console
+        )
+        _handle_existing_state(
+            cfg=cfg,
+            opts=opts,
+            existing_repos=existing_repos,
+            adopt_existing=adopt_existing,
+            console=console,
+        )
+        plan = planner.plan_create_with_existing(
+            plan, existing_repos=existing_repos, existing_mirrors=existing_mirrors
+        )
+    else:
+        tokens = None  # _execute_create will resolve on its own
+
     planner.render_plan(plan, console, dry_run=opts.dry_run, title=f"Create '{opts.name}'")
 
     if opts.dry_run:
@@ -189,7 +227,13 @@ def create(
         return
 
     _execute_create(
-        cfg=cfg, opts=opts, verbose=verbose, console=console, skip_preflight=skip_preflight
+        cfg=cfg,
+        opts=opts,
+        verbose=verbose,
+        console=console,
+        skip_preflight=skip_preflight,
+        plan_override=plan,
+        tokens_override=tokens,
     )
 
 
@@ -200,27 +244,29 @@ def _execute_create(
     verbose: bool,
     console: Console,
     skip_preflight: bool = False,
+    plan_override: Optional[planner.Plan] = None,
+    tokens_override: Optional[Dict[str, str]] = None,
 ) -> None:
     """Build a create plan and apply it. Token resolution + error rendering
     happen here so the CLI command stays focused on plan/render/confirm.
 
     Kept as a public-by-convention helper so existing tests (and the wizard
-    callback) can drive the apply without re-prompting.
+    callback) can drive the apply without re-prompting. The CLI passes
+    ``plan_override`` (the adoption-aware transformed plan) and
+    ``tokens_override`` (already resolved up-front for the probe) when it
+    has them; tests typically pass neither and rely on the plain plan +
+    token resolution here.
     """
-    primary_spec = cfg.primary_host()
-    fork_specs = cfg.fork_hosts()
-    tokens: Dict[str, str] = {
-        primary_spec.id: _resolve_token_or_die(primary_spec.id, allow_prompt=True, console=console)
-    }
-    for spec in fork_specs:
-        if spec.id not in tokens:
-            tokens[spec.id] = _resolve_token_or_die(spec.id, allow_prompt=True, console=console)
+    tokens = tokens_override if tokens_override is not None else _resolve_tokens_or_die(
+        cfg, console=console
+    )
 
-    if not skip_preflight:
+    if not skip_preflight and tokens_override is None:
+        # If the caller already preflighted (CLI path), skip the duplicate probe.
         _preflight_or_die(cfg=cfg, tokens=tokens, console=console)
 
     http.reset_retry_stats()
-    plan = planner.plan_create(cfg, opts)
+    plan = plan_override if plan_override is not None else planner.plan_create(cfg, opts)
     try:
         result = executor.apply_plan(
             plan, cfg=cfg, tokens=tokens, console=console, verbose=verbose
@@ -774,6 +820,157 @@ def _render_retry_footer(console: Console) -> None:
     hosts = ", ".join(sorted(stats))
     suffix = "s" if total != 1 else ""
     console.print(f"[dim]Retried {total} transient error{suffix} ({hosts}).[/dim]")
+
+
+def _resolve_tokens_or_die(cfg: Config, *, console: Console) -> Dict[str, str]:
+    """Resolve tokens for every configured host. Lifted out so the CLI can
+    pre-resolve once and hand them to both preflight + executor.
+    """
+    primary_spec = cfg.primary_host()
+    fork_specs = cfg.fork_hosts()
+    tokens: Dict[str, str] = {
+        primary_spec.id: _resolve_token_or_die(primary_spec.id, allow_prompt=True, console=console)
+    }
+    for spec in fork_specs:
+        if spec.id not in tokens:
+            tokens[spec.id] = _resolve_token_or_die(spec.id, allow_prompt=True, console=console)
+    return tokens
+
+
+def _probe_existing_state(
+    *,
+    cfg: Config,
+    opts: CreateOptions,
+    tokens: Dict[str, str],
+    console: Console,
+) -> Tuple[Dict[str, RepoRef], Dict[str, PrimaryMirror]]:
+    """Concurrently ask every configured host whether ``opts.name`` already exists.
+
+    Returns ``(existing_repos, existing_mirrors)``:
+    - ``existing_repos`` maps host_id → RepoRef for hosts that already have
+      the repo.
+    - ``existing_mirrors`` maps fork host_id → PrimaryMirror for forks whose
+      configured URL is already wired up as a push-mirror on the primary.
+      Only populated when the primary itself is in ``existing_repos``.
+    """
+    primary_spec = cfg.primary_host()
+    fork_specs = cfg.fork_hosts()
+    all_specs = [primary_spec, *fork_specs]
+    providers: Dict[str, Any] = {h.id: providers_mod.get(h.kind)(h) for h in all_specs}
+
+    existing_repos: Dict[str, RepoRef] = {}
+
+    def probe(spec: HostSpec) -> Tuple[str, Optional[RepoRef]]:
+        try:
+            ref = providers[spec.id].find_repo(
+                token=tokens[spec.id], name=opts.name, namespace=opts.group
+            )
+        except HydraAPIError as e:
+            # A probe failure shouldn't kill the whole flow — surface and
+            # treat as "doesn't exist" so create proceeds normally.
+            console.print(f"[yellow]⚠ {spec.id} existence probe failed: {e.message}[/yellow]")
+            return spec.id, None
+        return spec.id, ref
+
+    workers = max(1, min(len(all_specs), 8))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [ex.submit(probe, spec) for spec in all_specs]
+        for fut in as_completed(futures):
+            host_id, ref = fut.result()
+            if ref is not None:
+                existing_repos[host_id] = ref
+
+    # If the primary is adopted, also fetch its existing mirrors so we can
+    # skip add_outbound_mirror for forks that are already wired up.
+    existing_mirrors: Dict[str, PrimaryMirror] = {}
+    primary_ref = existing_repos.get(primary_spec.id)
+    primary_prov = providers[primary_spec.id]
+    if primary_ref is not None and isinstance(primary_prov, MirrorSource) and opts.mirror:
+        try:
+            mirrors = primary_prov.list_mirrors(
+                token=tokens[primary_spec.id], primary_repo=primary_ref
+            )
+        except HydraAPIError as e:
+            console.print(
+                f"[yellow]⚠ couldn't fetch existing mirrors on {primary_spec.id}: "
+                f"{e.message}[/yellow]"
+            )
+            mirrors = []
+        for m in mirrors:
+            fork = _match_fork(m.url, fork_specs)
+            if fork is not None:
+                existing_mirrors[fork.id] = PrimaryMirror(id=m.id, url=m.url)
+    return existing_repos, existing_mirrors
+
+
+def _handle_existing_state(
+    *,
+    cfg: Config,
+    opts: CreateOptions,
+    existing_repos: Dict[str, RepoRef],
+    adopt_existing: bool,
+    console: Console,
+) -> None:
+    """Apply the three resolution branches from Phase 6 of the plan.
+
+    - (a) repo exists everywhere AND the journal already records the primary
+      → print "already managed" and exit 0.
+    - (b) primary has it but journal is empty → prompt for adoption (skip
+      prompt if ``--adopt-existing``). On decline → exit 1.
+    - (c) anything else → return; caller transforms the plan with whatever
+      is in ``existing_repos``.
+    """
+    primary_id = cfg.primary
+    if primary_id not in existing_repos:
+        return  # primary doesn't have it — clean create path
+
+    # Case (a): all hosts have it AND journal records it.
+    all_hosts = {h.id for h in cfg.hosts}
+    if existing_repos.keys() >= all_hosts:
+        journal_has = _journal_records_primary(
+            name=opts.name, primary_host_id=primary_id, primary_repo=existing_repos[primary_id]
+        )
+        if journal_has:
+            console.print(
+                f"[green]✓[/green] '{opts.name}' already exists on every configured host "
+                f"and is recorded in the journal. Nothing to do."
+            )
+            console.print(f"  [dim]hydra status {opts.name}[/dim]")
+            raise typer.Exit(code=0) from None
+
+    # Case (b): primary exists, journal is empty.
+    if not _journal_records_primary(
+        name=opts.name, primary_host_id=primary_id, primary_repo=existing_repos[primary_id]
+    ):
+        primary_url = existing_repos[primary_id].http_url
+        console.print()
+        console.print(
+            f"[yellow]⚠ '{opts.name}' already exists on {primary_id}[/yellow] "
+            f"([dim]{primary_url}[/dim])"
+        )
+        console.print("  The hydra journal has no record of it.")
+        if not adopt_existing and not typer.confirm("  Adopt it?", default=False):
+            console.print("[dim]No changes made. Pass --adopt-existing to skip this prompt.[/dim]")
+            raise typer.Exit(code=1) from None
+
+
+def _journal_records_primary(
+    *, name: str, primary_host_id: str, primary_repo: RepoRef
+) -> bool:
+    """True if the journal already has an entry for this repo + primary host."""
+    if primary_repo.project_id is None:
+        return False
+    try:
+        with journal_mod.journal() as j:
+            for repo in j.list_repos():
+                if (
+                    repo.primary_host_id == primary_host_id
+                    and repo.primary_repo_id == primary_repo.project_id
+                ):
+                    return True
+    except Exception:  # noqa: BLE001 — best-effort
+        return False
+    return False
 
 
 def _preflight_or_die(*, cfg: Config, tokens: Dict[str, str], console: Console) -> None:

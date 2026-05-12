@@ -62,6 +62,7 @@ class _FakePrimary:
 
     def ensure_namespace(self, *, group_path, token): ...  # pragma: no cover
     def create_repo(self, **kwargs): ...  # pragma: no cover
+    def find_repo(self, **kwargs): ...  # pragma: no cover
     def add_outbound_mirror(self, **kwargs): ...  # pragma: no cover
     def replace_outbound_mirror(self, **kwargs): ...  # pragma: no cover
     def find_project(self, **kwargs): ...  # pragma: no cover

@@ -95,6 +95,19 @@ class Provider(Protocol):
         is_private: bool,
     ) -> RepoRef: ...
 
+    def find_repo(
+        self, *, token: str, name: str, namespace: Optional[str]
+    ) -> Optional[RepoRef]:
+        """Look up an existing repo by name + group/owner.
+
+        Returns a fully-populated ``RepoRef`` (with ``http_url`` and any
+        provider-specific id) when the repo exists, else ``None``. Used by
+        ``hydra create`` to detect re-runs and offer adoption instead of
+        clobbering. Distinct from :meth:`MirrorSource.find_project` which
+        is scan-specific and returns no ``http_url``.
+        """
+        ...
+
 
 @runtime_checkable
 class MirrorSource(Provider, Protocol):

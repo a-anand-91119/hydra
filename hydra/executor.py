@@ -63,7 +63,9 @@ def apply_plan(
     handlers: Dict[str, Callable[..., None]] = {
         "ensure_namespace": _h_ensure_namespace,
         "create_repo": _h_create_repo,
+        "skip_create_repo": _h_skip_create_repo,
         "add_outbound_mirror": _h_add_outbound_mirror,
+        "skip_add_mirror": _h_skip_add_mirror,
         "journal_record_repo": _h_journal_record_repo,
         "journal_record_mirror": _h_journal_record_mirror,
         "journal_update_push_id": _h_journal_update_push_id,
@@ -141,6 +143,37 @@ def _h_create_repo(ctx: _Ctx, action: Action) -> None:
     ctx.symbols[action.payload["ref"]] = repo
     ctx.result.created.append((f"{action.host_id} repo", repo.http_url))
     ctx.console.print(f"[green]✓[/green] {action.host_id}: {repo.http_url}")
+
+
+def _h_skip_create_repo(ctx: _Ctx, action: Action) -> None:
+    """Adoption-path counterpart to ``_h_create_repo``.
+
+    No HTTP call — the repo already exists. Populate the symbol so downstream
+    actions (mirror setup, journal record) resolve correctly.
+    """
+    payload = action.payload
+    repo = RepoRef(
+        http_url=payload["http_url"],
+        project_id=payload.get("project_id"),
+        namespace_path=payload.get("namespace_path"),
+    )
+    ctx.symbols[payload["ref"]] = repo
+    ctx.console.print(f"[dim]= adopted existing[/dim] {action.host_id}: {repo.http_url}")
+
+
+def _h_skip_add_mirror(ctx: _Ctx, action: Action) -> None:
+    """Adoption-path counterpart to ``_h_add_outbound_mirror``.
+
+    Reuses the existing push-mirror's id so the downstream
+    ``journal_record_mirror`` handler captures the correct value.
+    """
+    payload = action.payload
+    target = payload["target_host_id"]
+    ctx.symbols[f"mirror:{target}"] = {
+        "id": payload["push_mirror_id"],
+        "url": payload.get("mirror_url", ""),
+    }
+    ctx.console.print(f"[dim]= mirror to {target} already configured[/dim]")
 
 
 def _h_add_outbound_mirror(ctx: _Ctx, action: Action) -> None:

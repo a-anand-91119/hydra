@@ -176,6 +176,26 @@ class GitLabProvider:
             return None
         return RepoRef(http_url="", project_id=pid, namespace_path=None)
 
+    def find_repo(
+        self, *, token: str, name: str, namespace: Optional[str]
+    ) -> Optional[RepoRef]:
+        full_group = self._effective_group_path(namespace)
+        repo_path = f"{full_group}/{name}" if full_group else name
+        payload = mirrors_api.find_project(
+            host_id=self.spec.id,
+            base_url=self.spec.url,
+            token=token,
+            repo_path=repo_path,
+        )
+        if payload is None:
+            return None
+        pid = payload.get("id")
+        return RepoRef(
+            http_url=payload.get("http_url_to_repo", ""),
+            project_id=int(pid) if pid is not None else None,
+            namespace_path=full_group,
+        )
+
     def list_mirrors(self, *, token: str, primary_repo: RepoRef) -> List[MirrorInfo]:
         if primary_repo.project_id is None:
             return []
