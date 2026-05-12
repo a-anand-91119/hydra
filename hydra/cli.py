@@ -250,8 +250,8 @@ def _execute_create(
     """Build a create plan and apply it. Token resolution + error rendering
     happen here so the CLI command stays focused on plan/render/confirm.
 
-    Kept as a public-by-convention helper so existing tests (and the wizard
-    callback) can drive the apply without re-prompting. The CLI passes
+    Kept as a public-by-convention helper so tests can drive the apply
+    without going through the CLI prompts. The ``create`` command passes
     ``plan_override`` (the adoption-aware transformed plan) and
     ``tokens_override`` (already resolved up-front) along with
     ``skip_preflight=True`` because it already ran preflight; direct test

@@ -57,7 +57,7 @@ def patches(cfg):
     with (
         patch("hydra.cli.secrets_mod.get_token", side_effect=lambda hid, **_: f"tok-{hid}"),
         patch.object(cli_mod, "_load_or_die", lambda *a, **k: cfg),
-        patch("hydra.cli._preflight_or_die"),  # Phase 7 — assume tokens OK
+        patch("hydra.cli._preflight_or_die") as preflight,
         patch("hydra.gitlab.get_or_create_group_path") as gl_groups,
         patch("hydra.gitlab.create_repo") as gl_create,
         patch("hydra.mirrors.add_mirror") as mi_add,
@@ -74,6 +74,7 @@ def patches(cfg):
         gl_find.return_value = None  # default: nothing exists
         gl_list_mirrors.return_value = []
         yield {
+            "preflight": preflight,
             "gl_groups": gl_groups,
             "gl_create": gl_create,
             "mi_add": mi_add,
@@ -269,11 +270,23 @@ class TestPreflightProbeDecoupling:
         result = runner.invoke(
             cli_mod.app, ["create", "probe", "--yes", "--no-probe"]
         )
-        # Preflight (mocked in `patches`) was called; find_repo was not.
         assert result.exit_code == 0, result.output
+        # The whole point of the fix: --no-probe DOES NOT short-circuit preflight.
+        patches["preflight"].assert_called_once()
         patches["gl_find"].assert_not_called()
         # Real provider mutations still ran (plan unchanged by probe).
         assert patches["gl_create"].call_count == 2
+
+    def test_skip_preflight_alone_does_not_disable_probe(self, cfg, patches):
+        """And conversely: --skip-preflight should leave the probe running."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.app, ["create", "probe", "--yes", "--skip-preflight"]
+        )
+        assert result.exit_code == 0, result.output
+        patches["preflight"].assert_not_called()
+        # Probe fired against both hosts.
+        assert patches["gl_find"].call_count == 2
 
 
 class TestProbeFailure:
