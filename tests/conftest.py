@@ -29,6 +29,18 @@ def _isolate_state_paths(tmp_path, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _reset_http_retry_stats():
+    """Zero the global retry counter before each test so retry telemetry
+    assertions don't leak across tests, regardless of test order.
+    """
+    from hydra import http as _http
+
+    _http.reset_retry_stats()
+    yield
+    _http.reset_retry_stats()
+
+
 class FakeResponse:
     """Minimal stand-in for requests.Response used by error tests."""
 

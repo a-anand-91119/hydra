@@ -19,8 +19,8 @@ def _resp(items, *, total_pages=None, next_page=""):
     return FakeResponse(200, items, headers=headers)
 
 
-class _SessionStub:
-    """Minimal stand-in for the per-thread requests.Session."""
+class _HttpStub:
+    """Minimal stand-in for the ``hydra.http`` module surface used by gitlab.py."""
 
     def __init__(self, get_handler=None, post_handler=None):
         self._get = get_handler
@@ -28,12 +28,12 @@ class _SessionStub:
         self.get_calls = []
         self.post_calls = []
 
-    def get(self, url, headers=None, params=None):
-        self.get_calls.append({"url": url, "headers": headers, "params": params or {}})
+    def get(self, url, headers=None, params=None, **kw):
+        self.get_calls.append({"url": url, "headers": headers, "params": params or {}, "kw": kw})
         return self._get(url, params or {})
 
-    def post(self, url, headers=None, data=None):
-        self.post_calls.append({"url": url, "headers": headers, "data": data})
+    def post(self, url, headers=None, data=None, **kw):
+        self.post_calls.append({"url": url, "headers": headers, "data": data, "kw": kw})
         return self._post(url, data or {})
 
 
@@ -50,8 +50,8 @@ class TestPaginateConcurrent:
         def get(url, params):
             return pages[int(params["page"])]
 
-        sess = _SessionStub(get_handler=get)
-        monkeypatch.setattr(gitlab_api, "_session", lambda: sess)
+        stub = _HttpStub(get_handler=get)
+        monkeypatch.setattr(gitlab_api, "http", stub)
 
         out = gitlab_api._paginate(
             host="h",
@@ -62,15 +62,15 @@ class TestPaginateConcurrent:
         )
         assert [d["i"] for d in out] == [1, 2, 3, 4, 5, 6]
         # Each page fetched exactly once.
-        seen_pages = sorted(c["params"]["page"] for c in sess.get_calls)
+        seen_pages = sorted(c["params"]["page"] for c in stub.get_calls)
         assert seen_pages == [1, 2, 3]
 
     def test_single_page_does_no_fan_out(self, monkeypatch):
-        sess = _SessionStub(get_handler=lambda u, p: _resp([{"i": 1}], total_pages=1))
-        monkeypatch.setattr(gitlab_api, "_session", lambda: sess)
+        stub = _HttpStub(get_handler=lambda u, p: _resp([{"i": 1}], total_pages=1))
+        monkeypatch.setattr(gitlab_api, "http", stub)
         out = gitlab_api._paginate(host="h", endpoint="x", headers={}, params={}, max_workers=8)
         assert out == [{"i": 1}]
-        assert len(sess.get_calls) == 1
+        assert len(stub.get_calls) == 1
 
     def test_keyset_fallback_walks_sequentially(self, monkeypatch):
         # X-Total-Pages absent; X-Next-Page is the only signal.
@@ -86,15 +86,15 @@ class TestPaginateConcurrent:
             idx["n"] += 1
             return r
 
-        sess = _SessionStub(get_handler=get)
-        monkeypatch.setattr(gitlab_api, "_session", lambda: sess)
+        stub = _HttpStub(get_handler=get)
+        monkeypatch.setattr(gitlab_api, "http", stub)
         out = gitlab_api._paginate(host="h", endpoint="x", headers={}, params={}, max_workers=8)
         assert [d["i"] for d in out] == [1, 2, 3]
-        assert len(sess.get_calls) == 3
+        assert len(stub.get_calls) == 3
 
     def test_total_pages_zero_or_one_uses_keyset_path(self, monkeypatch):
-        sess = _SessionStub(get_handler=lambda u, p: _resp([{"i": 1}], total_pages=0))
-        monkeypatch.setattr(gitlab_api, "_session", lambda: sess)
+        stub = _HttpStub(get_handler=lambda u, p: _resp([{"i": 1}], total_pages=0))
+        monkeypatch.setattr(gitlab_api, "http", stub)
         out = gitlab_api._paginate(host="h", endpoint="x", headers={}, params={})
         assert out == [{"i": 1}]
 
@@ -114,8 +114,8 @@ class TestListProjectsWithMirrors:
             pid = int(url.rstrip("/").split("/")[-2])
             return _resp([{"id": 100 + pid, "url": f"https://mirror/{pid}.git"}])
 
-        sess = _SessionStub(get_handler=get)
-        monkeypatch.setattr(gitlab_api, "_session", lambda: sess)
+        stub = _HttpStub(get_handler=get)
+        monkeypatch.setattr(gitlab_api, "http", stub)
 
         out = gitlab_api.list_projects_with_mirrors(
             host="h", base_url="https://gl", token="t", namespace="g", max_workers=4
@@ -139,28 +139,9 @@ class TestListProjectsWithMirrors:
                 return FakeResponse(403, {"message": "no"})
             return _resp([{"id": 7, "url": "https://m/1.git"}])
 
-        sess = _SessionStub(get_handler=get)
-        monkeypatch.setattr(gitlab_api, "_session", lambda: sess)
+        stub = _HttpStub(get_handler=get)
+        monkeypatch.setattr(gitlab_api, "http", stub)
         out = gitlab_api.list_projects_with_mirrors(
             host="h", base_url="https://gl", token="t", namespace="g"
         )
         assert [p.project_id for p in out] == [1]
-
-
-class TestRetryConfig:
-    def test_retry_status_forcelist_is_honored(self):
-        retry = gitlab_api._build_retry()
-        assert 429 in retry.status_forcelist
-        assert 502 in retry.status_forcelist
-        assert 503 in retry.status_forcelist
-        assert 504 in retry.status_forcelist
-        # Mutating verbs MUST NOT auto-retry.
-        assert "POST" not in retry.allowed_methods
-        assert "DELETE" not in retry.allowed_methods
-        assert "GET" in retry.allowed_methods
-
-    def test_session_is_thread_local(self):
-        # A given thread always gets the same session back.
-        s1 = gitlab_api._session()
-        s2 = gitlab_api._session()
-        assert s1 is s2

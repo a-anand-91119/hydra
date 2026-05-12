@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 from urllib.parse import quote
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-
+from hydra import http
 from hydra.errors import raise_for_response
 from hydra.utils import create_slug
 
@@ -49,37 +45,6 @@ class GroupResolution:
     created_paths: list[str] = field(default_factory=list)
 
 
-# ── Shared HTTP session with retry ───────────────────────────────────────
-#
-# One ``requests.Session`` per thread (created lazily) wraps every GitLab
-# call. Idempotent verbs (GET/HEAD) get transparent retries on 429/5xx; POST
-# and DELETE never retry — at-most-once semantics for mutations.
-
-_thread_local = threading.local()
-
-
-def _build_retry() -> Retry:
-    return Retry(
-        total=3,
-        backoff_factor=0.3,
-        status_forcelist=(429, 502, 503, 504),
-        allowed_methods=frozenset(["GET", "HEAD"]),
-        respect_retry_after_header=True,
-        raise_on_status=False,
-    )
-
-
-def _session() -> requests.Session:
-    s = getattr(_thread_local, "session", None)
-    if s is None:
-        s = requests.Session()
-        adapter = HTTPAdapter(pool_connections=16, pool_maxsize=32, max_retries=_build_retry())
-        s.mount("http://", adapter)
-        s.mount("https://", adapter)
-        _thread_local.session = s
-    return s
-
-
 def create_repo(
     *,
     host: str,
@@ -99,7 +64,7 @@ def create_repo(
     if namespace_id is not None:
         data["namespace_id"] = namespace_id
 
-    response = _session().post(f"{base_url}/api/v4/projects", headers=headers, data=data)
+    response = http.post(f"{base_url}/api/v4/projects", headers=headers, data=data)
     raise_for_response(response, host=host, action=f"creating repo '{name}'", host_url=base_url)
     payload = response.json()
     return CreatedRepo(http_url=payload["http_url_to_repo"], project_id=payload["id"])
@@ -132,7 +97,7 @@ def get_or_create_group_path(
 
         slug = create_slug(component, add_timestamp)
 
-        search_resp = _session().get(
+        search_resp = http.get(
             f"{base_url}/api/v4/groups",
             headers=headers,
             params={"search": component, "per_page": 100},
@@ -154,7 +119,7 @@ def get_or_create_group_path(
         if parent_id is not None:
             data["parent_id"] = parent_id
 
-        create_resp = _session().post(f"{base_url}/api/v4/groups", headers=headers, data=data)
+        create_resp = http.post(f"{base_url}/api/v4/groups", headers=headers, data=data)
         raise_for_response(
             create_resp,
             host=host,
@@ -178,7 +143,7 @@ def _find_group(groups: list[dict], name: str, parent_id: int | None) -> int | N
 def verify_token(*, host: str, base_url: str, token: str) -> None:
     """Probe the host with the new token to confirm it works. Raises HydraAPIError on failure."""
     headers = {"PRIVATE-TOKEN": token}
-    response = _session().get(f"{base_url}/api/v4/user", headers=headers)
+    response = http.get(f"{base_url}/api/v4/user", headers=headers)
     raise_for_response(response, host=host, action="verifying token", host_url=base_url)
 
 
@@ -192,10 +157,10 @@ def inspect_token(*, host: str, base_url: str, token: str):
     from hydra.secrets import TokenScopes
 
     headers = {"PRIVATE-TOKEN": token}
-    resp = _session().get(f"{base_url}/api/v4/personal_access_tokens/self", headers=headers)
+    resp = http.get(f"{base_url}/api/v4/personal_access_tokens/self", headers=headers)
     if resp.status_code == 404:
         # Older GitLab: fall back to /user just to confirm validity.
-        fb = _session().get(f"{base_url}/api/v4/user", headers=headers)
+        fb = http.get(f"{base_url}/api/v4/user", headers=headers)
         raise_for_response(fb, host=host, action="inspecting token (fallback)", host_url=base_url)
         return TokenScopes(scopes=[], expires_at=None, scopes_known=False)
     raise_for_response(resp, host=host, action="inspecting token", host_url=base_url)
@@ -277,7 +242,7 @@ def _fetch_project_mirrors(
     *, host: str, base_url: str, headers: dict, project_id: int
 ) -> Optional[List[GitLabMirrorSummary]]:
     """Fetch one project's remote mirrors. Returns None on 403 (skip)."""
-    resp = _session().get(
+    resp = http.get(
         f"{base_url}/api/v4/projects/{project_id}/remote_mirrors",
         headers=headers,
     )
@@ -337,7 +302,7 @@ def _paginate(
     page1_params = dict(params)
     page1_params["page"] = 1
     page1_params.setdefault("per_page", 100)
-    resp = _session().get(endpoint, headers=headers, params=page1_params)
+    resp = http.get(endpoint, headers=headers, params=page1_params)
     raise_for_response(resp, host=host, action="listing projects", host_url=endpoint)
     items = list(resp.json())
 
@@ -363,7 +328,7 @@ def _paginate(
         page_params = dict(params)
         page_params["page"] = int(next_page)
         page_params.setdefault("per_page", 100)
-        resp = _session().get(endpoint, headers=headers, params=page_params)
+        resp = http.get(endpoint, headers=headers, params=page_params)
         raise_for_response(resp, host=host, action="listing projects", host_url=endpoint)
         chunk = resp.json()
         if not chunk:
@@ -379,6 +344,6 @@ def _fetch_page(
     page_params = dict(base_params)
     page_params["page"] = page
     page_params.setdefault("per_page", 100)
-    resp = _session().get(endpoint, headers=headers, params=page_params)
+    resp = http.get(endpoint, headers=headers, params=page_params)
     raise_for_response(resp, host=host, action="listing projects", host_url=endpoint)
     return list(resp.json())

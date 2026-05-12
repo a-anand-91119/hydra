@@ -14,7 +14,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
-from hydra import __version__, executor, planner
+from hydra import __version__, executor, http, planner
 from hydra import doctor as doctor_mod
 from hydra import journal as journal_mod
 from hydra import paths as paths_mod
@@ -200,15 +200,21 @@ def _execute_create(*, cfg: Config, opts: CreateOptions, verbose: bool, console:
         if spec.id not in tokens:
             tokens[spec.id] = _resolve_token_or_die(spec.id, allow_prompt=True, console=console)
 
+    http.reset_retry_stats()
     plan = planner.plan_create(cfg, opts)
-    result = executor.apply_plan(plan, cfg=cfg, tokens=tokens, console=console, verbose=verbose)
-    if not result.ok:
-        err = result.error
-        if isinstance(err, HydraAPIError):
-            _render_api_error(console, err, result.created)
-        else:
-            console.print(f"[red]{err}[/red]")
-        raise typer.Exit(code=1) from None
+    try:
+        result = executor.apply_plan(
+            plan, cfg=cfg, tokens=tokens, console=console, verbose=verbose
+        )
+        if not result.ok:
+            err = result.error
+            if isinstance(err, HydraAPIError):
+                _render_api_error(console, err, result.created)
+            else:
+                console.print(f"[red]{err}[/red]")
+            raise typer.Exit(code=1) from None
+    finally:
+        _render_retry_footer(console)
 
 
 def _safe_int(value: Any) -> Optional[int]:
@@ -683,57 +689,72 @@ def scan_command(
         )
 
     token = _resolve_token_or_die(primary_spec.id, allow_prompt=True, console=console)
+    http.reset_retry_stats()
 
     try:
-        with journal_mod.journal() as j:
-            journal_repos = j.list_repos()
-    except Exception as e:  # noqa: BLE001
-        console.print(f"[red]Could not open journal: {e}[/red]")
-        raise typer.Exit(code=1) from None
-
-    try:
-        snapshot = primary.list_projects_with_mirrors(
-            token=token, namespace=scope, max_workers=max_workers
-        )
-    except HydraAPIError as e:
-        _render_api_error(console, e, created=[])
-        raise typer.Exit(code=1) from None
-
-    diff = journal_mod.scan_diff(
-        journal_repos, _to_primary_snapshots(snapshot), primary_host_id=primary_spec.id
-    )
-    by_repo_id = {p.project_id: p for p in snapshot}
-    fork_specs = cfg.fork_hosts()
-
-    _print_scan_diff(console, diff, by_repo_id=by_repo_id, fork_specs=fork_specs)
-
-    mutated = False
-    if (apply or interactive) and (diff.unknown or diff.drift):
-        mutated = _apply_scan_diff(
-            console=console,
-            cfg=cfg,
-            diff=diff,
-            by_repo_id=by_repo_id,
-            fork_specs=fork_specs,
-            interactive=interactive,
-            yes=yes,
-        )
-
-    # Re-eval state for exit code: if user adopted everything in scope, exit 0.
-    if mutated:
         try:
             with journal_mod.journal() as j:
-                final_repos = j.list_repos()
-        except Exception:  # noqa: BLE001 — already reported above if anything went sideways
-            final_repos = journal_repos
-        final_diff = journal_mod.scan_diff(
-            final_repos,
-            _to_primary_snapshots(snapshot),
-            primary_host_id=primary_spec.id,
-        )
-        raise typer.Exit(code=0 if final_diff.is_clean else 1)
+                journal_repos = j.list_repos()
+        except Exception as e:  # noqa: BLE001
+            console.print(f"[red]Could not open journal: {e}[/red]")
+            raise typer.Exit(code=1) from None
 
-    raise typer.Exit(code=0 if diff.is_clean else 1)
+        try:
+            snapshot = primary.list_projects_with_mirrors(
+                token=token, namespace=scope, max_workers=max_workers
+            )
+        except HydraAPIError as e:
+            _render_api_error(console, e, created=[])
+            raise typer.Exit(code=1) from None
+
+        diff = journal_mod.scan_diff(
+            journal_repos, _to_primary_snapshots(snapshot), primary_host_id=primary_spec.id
+        )
+        by_repo_id = {p.project_id: p for p in snapshot}
+        fork_specs = cfg.fork_hosts()
+
+        _print_scan_diff(console, diff, by_repo_id=by_repo_id, fork_specs=fork_specs)
+
+        mutated = False
+        if (apply or interactive) and (diff.unknown or diff.drift):
+            mutated = _apply_scan_diff(
+                console=console,
+                cfg=cfg,
+                diff=diff,
+                by_repo_id=by_repo_id,
+                fork_specs=fork_specs,
+                interactive=interactive,
+                yes=yes,
+            )
+
+        # Re-eval state for exit code: if user adopted everything in scope, exit 0.
+        if mutated:
+            try:
+                with journal_mod.journal() as j:
+                    final_repos = j.list_repos()
+            except Exception:  # noqa: BLE001 — already reported above
+                final_repos = journal_repos
+            final_diff = journal_mod.scan_diff(
+                final_repos,
+                _to_primary_snapshots(snapshot),
+                primary_host_id=primary_spec.id,
+            )
+            raise typer.Exit(code=0 if final_diff.is_clean else 1)
+
+        raise typer.Exit(code=0 if diff.is_clean else 1)
+    finally:
+        _render_retry_footer(console)
+
+
+def _render_retry_footer(console: Console) -> None:
+    """Print "Retried N transient errors" if any retries fired this command."""
+    stats = http.pop_retry_stats()
+    total = sum(stats.values())
+    if total <= 0:
+        return
+    hosts = ", ".join(sorted(stats))
+    suffix = "s" if total != 1 else ""
+    console.print(f"[dim]Retried {total} transient error{suffix} ({hosts}).[/dim]")
 
 
 def _default_scan_namespace(primary_spec: HostSpec, cfg: Config) -> Optional[str]:

@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse, urlunparse
 
+from hydra import http
 from hydra.errors import raise_for_response
-from hydra.gitlab import _session
 
 
 @dataclass
@@ -63,7 +63,7 @@ def add_mirror(
 ) -> Dict[str, Any]:
     headers = {"PRIVATE-TOKEN": token}
     data = {"url": mirror_url, "enabled": True, "only_protected_branches": False}
-    response = _session().post(
+    response = http.post(
         f"{base_url}/api/v4/projects/{project_id}/remote_mirrors",
         headers=headers,
         data=data,
@@ -79,7 +79,7 @@ def add_mirror(
 
 def list_mirrors(*, host_id: str, base_url: str, token: str, project_id: int) -> List[Mirror]:
     headers = {"PRIVATE-TOKEN": token}
-    response = _session().get(
+    response = http.get(
         f"{base_url}/api/v4/projects/{project_id}/remote_mirrors", headers=headers
     )
     raise_for_response(
@@ -109,9 +109,16 @@ def delete_mirror(
     project_id: int,
     mirror_id: int,
 ) -> None:
-    """Remove a push-mirror by id. GitLab returns 204 No Content on success."""
+    """Remove a push-mirror by id. GitLab returns 204 No Content on success.
+
+    Note: the shared HTTP layer will retry a DELETE once if the *initial TCP
+    connect* failed (see ``hydra.http``). If a successful DELETE's response
+    is lost and the retry then hits 404, the caller will see a confusing
+    "Not Found" error. That's a known trade-off — the retry budget is capped
+    at 1 and only fires on ``NewConnectionError``, so the race window is small.
+    """
     headers = {"PRIVATE-TOKEN": token}
-    response = _session().delete(
+    response = http.delete(
         f"{base_url}/api/v4/projects/{project_id}/remote_mirrors/{mirror_id}",
         headers=headers,
     )
@@ -128,7 +135,7 @@ def delete_mirror(
 def find_project_id(*, host_id: str, base_url: str, token: str, repo_path: str) -> Optional[int]:
     headers = {"PRIVATE-TOKEN": token}
     encoded = quote(repo_path, safe="")
-    response = _session().get(f"{base_url}/api/v4/projects/{encoded}", headers=headers)
+    response = http.get(f"{base_url}/api/v4/projects/{encoded}", headers=headers)
     if response.status_code == 200:
         return response.json().get("id")
     if response.status_code == 404:
