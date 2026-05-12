@@ -101,7 +101,7 @@ class TestExecuteCreateHappyPath:
     def test_creates_primary_plus_forks_and_mirrors(self, cfg, opts, console, patches):
         _stub_happy(patches)
 
-        _execute_create(cfg=cfg, opts=opts, verbose=False, console=console)
+        _execute_create(cfg=cfg, opts=opts, verbose=False, console=console, skip_preflight=True)
 
         # 2 gitlab repos created (primary + gitlab.com fork)
         assert patches["gl_create"].call_count == 2
@@ -117,7 +117,7 @@ class TestExecuteCreateHappyPath:
 
     def test_primary_no_timestamp_fork_gitlab_com_timestamped(self, cfg, opts, console, patches):
         _stub_happy(patches)
-        _execute_create(cfg=cfg, opts=opts, verbose=False, console=console)
+        _execute_create(cfg=cfg, opts=opts, verbose=False, console=console, skip_preflight=True)
 
         primary_call = patches["gl_groups"].call_args_list[0]
         fork_call = patches["gl_groups"].call_args_list[1]
@@ -132,7 +132,7 @@ class TestExecuteCreateHappyPath:
         opts.mirror = False
         _stub_happy(patches)
 
-        _execute_create(cfg=cfg, opts=opts, verbose=False, console=console)
+        _execute_create(cfg=cfg, opts=opts, verbose=False, console=console, skip_preflight=True)
         patches["mi_add"].assert_not_called()
 
     def test_writes_journal_rows(self, cfg, opts, console, patches):
@@ -140,7 +140,7 @@ class TestExecuteCreateHappyPath:
         mirror row per fork, each tagged with the push_mirror_id returned by
         the GitLab API."""
         _stub_happy(patches)
-        _execute_create(cfg=cfg, opts=opts, verbose=False, console=console)
+        _execute_create(cfg=cfg, opts=opts, verbose=False, console=console, skip_preflight=True)
 
         with journal_mod.journal() as j:
             repos = j.list_repos()
@@ -167,7 +167,7 @@ class TestExecuteCreatePartialFailure:
         patches["gh_create"].side_effect = HydraAPIError(message="github boom", hint="check token")
 
         with pytest.raises(typer.Exit):
-            _execute_create(cfg=cfg, opts=opts, verbose=False, console=console)
+            _execute_create(cfg=cfg, opts=opts, verbose=False, console=console, skip_preflight=True)
 
         out = console.export_text()
         assert "github boom" in out
@@ -191,7 +191,7 @@ class TestExecuteCreatePartialFailure:
         ]
 
         with pytest.raises(typer.Exit):
-            _execute_create(cfg=cfg, opts=opts, verbose=False, console=console)
+            _execute_create(cfg=cfg, opts=opts, verbose=False, console=console, skip_preflight=True)
 
         out = console.export_text()
         assert "mirror boom" in out
@@ -258,7 +258,9 @@ class TestDryRunAndConfirm:
         monkeypatch.setattr(cli_mod, "_load_or_die", lambda *a, **k: cfg)
         # patches["..."] already stubs secrets.get_token via hydra.cli.secrets_mod
         runner = CliRunner()
-        result = runner.invoke(cli_mod.app, ["create", "probe", "--yes"])
+        result = runner.invoke(
+            cli_mod.app, ["create", "probe", "--yes", "--skip-preflight"]
+        )
         assert result.exit_code == 0, result.output
         assert patches["gl_create"].call_count >= 1
 
@@ -299,7 +301,7 @@ class TestNForks:
         patches["gh_create"].return_value = "https://github.com/me/probe.git"
         patches["mi_add"].return_value = {}
 
-        _execute_create(cfg=cfg, opts=opts, verbose=False, console=console)
+        _execute_create(cfg=cfg, opts=opts, verbose=False, console=console, skip_preflight=True)
 
         assert patches["gh_create"].call_count == 1
         assert patches["gl_create"].call_count == 3
@@ -307,3 +309,82 @@ class TestNForks:
         assert patches["mi_add"].call_count == 3
         for call in patches["mi_add"].call_args_list:
             assert call.kwargs["project_id"] == 100
+
+
+class TestPreflight:
+    """Phase 7: pre-mutation token-scope check."""
+
+    def test_create_bails_when_primary_token_lacks_api_scope(
+        self, cfg, opts, console, patches
+    ):
+        import click
+
+        from hydra import cli as cli_mod_local
+        from hydra import preflight
+        _stub_happy(patches)
+
+        bad = preflight.PreflightReport(
+            errors=[
+                preflight.PreflightFinding(
+                    host_id="self_hosted_gitlab",
+                    message="self_hosted_gitlab — token valid but missing scope(s): api",
+                    hint="rotate me",
+                )
+            ]
+        )
+        with (
+            patch("hydra.cli.preflight_mod.check_tokens", return_value=bad),
+            patch.object(cli_mod_local, "executor") as exec_mod,
+            pytest.raises(click.exceptions.Exit) as excinfo,
+        ):
+            _execute_create(cfg=cfg, opts=opts, verbose=False, console=console)
+        assert excinfo.value.exit_code == 1
+        # Executor never touched.
+        exec_mod.apply_plan.assert_not_called()
+        # And no provider mutations either.
+        patches["gl_create"].assert_not_called()
+
+    def test_create_proceeds_when_all_tokens_valid(self, cfg, opts, console, patches):
+        from hydra import preflight
+        _stub_happy(patches)
+
+        with patch(
+            "hydra.cli.preflight_mod.check_tokens",
+            return_value=preflight.PreflightReport(
+                oks=[preflight.PreflightFinding(host_id=h, message=f"{h} — ok") for h in
+                     ("self_hosted_gitlab", "gitlab", "github")]
+            ),
+        ):
+            _execute_create(cfg=cfg, opts=opts, verbose=False, console=console)
+        assert patches["gl_create"].call_count == 2
+        assert patches["gh_create"].call_count == 1
+
+    def test_create_warns_but_proceeds_on_unknown_scopes(
+        self, cfg, opts, console, patches
+    ):
+        from hydra import preflight
+        _stub_happy(patches)
+
+        with patch(
+            "hydra.cli.preflight_mod.check_tokens",
+            return_value=preflight.PreflightReport(
+                warnings=[
+                    preflight.PreflightFinding(
+                        host_id="github",
+                        message="github — token valid (scopes not exposed by host)",
+                    )
+                ]
+            ),
+        ):
+            _execute_create(cfg=cfg, opts=opts, verbose=False, console=console)
+        assert patches["gl_create"].call_count == 2
+        # Warning surfaced to the console.
+        assert "scopes not exposed" in console.export_text()
+
+    def test_skip_preflight_bypasses_check(self, cfg, opts, console, patches):
+        _stub_happy(patches)
+        with patch("hydra.cli.preflight_mod.check_tokens") as check:
+            _execute_create(
+                cfg=cfg, opts=opts, verbose=False, console=console, skip_preflight=True
+            )
+        check.assert_not_called()

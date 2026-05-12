@@ -11,7 +11,15 @@ from typer.testing import CliRunner
 from hydra import cli as cli_mod
 from hydra import journal as journal_mod
 from hydra.config import Config, Defaults, HostSpec
+from hydra.preflight import PreflightReport
 from hydra.providers.base import MirrorInfo, PrimaryMirror, PrimaryProject
+
+
+def _clean_preflight() -> PreflightReport:
+    """Empty PreflightReport — used as a return value when patching the
+    network probe in rotate-token tests that don't exercise scope-checking.
+    """
+    return PreflightReport()
 
 
 def _proj(*, project_id, web_url, name, full_path, mirrors):
@@ -607,6 +615,7 @@ class TestRotateToken:
         with (
             patch.object(cli_mod, "_load_or_die", return_value=cfg),
             patch("hydra.gitlab.verify_token") as verify,
+            patch("hydra.cli.preflight_mod.check_tokens", return_value=_clean_preflight()),
             patch("hydra.secrets.set_token") as set_token,
             patch("hydra.providers.gitlab.GitLabProvider.replace_outbound_mirror") as replace_call,
         ):
@@ -622,6 +631,7 @@ class TestRotateToken:
         with (
             patch.object(cli_mod, "_load_or_die", return_value=cfg),
             patch("hydra.github.verify_token") as verify,
+            patch("hydra.cli.preflight_mod.check_tokens", return_value=_clean_preflight()),
             patch("hydra.secrets.set_token") as set_token,
             patch("hydra.cli.secrets_mod.get_token", return_value="primary-tok"),
             patch(
@@ -649,6 +659,7 @@ class TestRotateToken:
         with (
             patch.object(cli_mod, "_load_or_die", return_value=cfg),
             patch("hydra.github.verify_token") as verify,
+            patch("hydra.cli.preflight_mod.check_tokens", return_value=_clean_preflight()),
             patch("hydra.secrets.set_token") as set_token,
             patch("hydra.providers.gitlab.GitLabProvider.replace_outbound_mirror") as replace_call,
         ):
@@ -672,6 +683,7 @@ class TestRotateToken:
         with (
             patch.object(cli_mod, "_load_or_die", return_value=cfg),
             patch("hydra.github.verify_token"),
+            patch("hydra.cli.preflight_mod.check_tokens", return_value=_clean_preflight()),
             patch("hydra.secrets.set_token"),
             patch("hydra.cli.secrets_mod.get_token", return_value="primary-tok"),
             patch(
@@ -692,6 +704,7 @@ class TestRotateToken:
         with (
             patch.object(cli_mod, "_load_or_die", return_value=cfg),
             patch("hydra.github.verify_token") as verify,
+            patch("hydra.cli.preflight_mod.check_tokens") as preflight,
             patch("hydra.secrets.set_token"),
             patch("hydra.cli.secrets_mod.get_token", return_value="t"),
             patch(
@@ -705,3 +718,34 @@ class TestRotateToken:
             )
         assert result.exit_code == 0, result.output
         verify.assert_not_called()
+        # --skip-verify bypasses the preflight too (same code path).
+        preflight.assert_not_called()
+
+    def test_rotate_token_bails_on_scope_mismatch_before_keyring_write(
+        self, cfg, seeded_journal
+    ):
+        """If preflight's scope check fails, secrets.set_token must NOT be called."""
+        from hydra.preflight import PreflightFinding, PreflightReport
+
+        bad = PreflightReport(
+            errors=[
+                PreflightFinding(
+                    host_id="github",
+                    message="github — token valid but missing scope(s): repo",
+                    hint="mint a new PAT",
+                )
+            ]
+        )
+        runner = CliRunner()
+        with (
+            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch("hydra.github.verify_token"),
+            patch("hydra.cli.preflight_mod.check_tokens", return_value=bad),
+            patch("hydra.secrets.set_token") as set_token,
+            patch("hydra.providers.gitlab.GitLabProvider.replace_outbound_mirror") as replace_call,
+        ):
+            result = runner.invoke(cli_mod.app, ["rotate-token", "github", "--token", "ghp_x"])
+        assert result.exit_code == 1, result.output
+        set_token.assert_not_called()
+        replace_call.assert_not_called()
+        assert "missing scope" in result.output.lower()

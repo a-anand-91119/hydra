@@ -13,23 +13,12 @@ import keyring
 
 from hydra import journal as journal_mod
 from hydra import paths as paths_mod
+from hydra import preflight as preflight_mod
 from hydra import providers as providers_mod
 from hydra import secrets as secrets_mod
-from hydra.config import Config, HostSpec
+from hydra.config import Config
 from hydra.doctor.findings import Finding, Level, Report
-from hydra.errors import HydraAPIError
 from hydra.migrations import detect_version, pending
-
-# Minimum machine-readable scopes hydra needs per provider kind. Tokens may
-# carry more (and usually do); warning fires only when one of these is absent.
-_REQUIRED_SCOPES: Dict[str, set] = {
-    "gitlab": {"api"},
-    "github": {"repo"},
-}
-# Acceptable substitutes — if any of these is present, the corresponding
-# required scope is considered satisfied (lets users grant least-privilege
-# org admin scopes interchangeably).
-_GITHUB_ORG_SCOPES = {"admin:org", "write:org"}
 
 
 @dataclass
@@ -352,118 +341,46 @@ def _resolve_token_for_doctor(state: DoctorState, host_id: str) -> Optional[str]
     return None
 
 
-def _inspect_for_host(host: HostSpec, token: str):
-    """Dispatch to the provider's token-inspection probe."""
-    if host.kind == "gitlab":
-        from hydra import gitlab as gitlab_api
-
-        return gitlab_api.inspect_token(host=host.id, base_url=host.url, token=token)
-    if host.kind == "github":
-        from hydra import github as github_api
-
-        return github_api.inspect_token(base_url=host.url, token=token)
-    return None  # Unknown kind — caller decides what to report.
-
-
-def _required_scopes_for(host: HostSpec) -> set:
-    """Return the set of scopes hydra needs on this host, accounting for options."""
-    base = set(_REQUIRED_SCOPES.get(host.kind, set()))
-    if host.kind == "github" and host.options.get("org"):
-        base = base | {"_org"}  # sentinel — resolved against _GITHUB_ORG_SCOPES below
-    return base
-
-
-def _missing_scopes(required: set, have: List[str]) -> set:
-    """Compute missing scopes, treating GitHub org permissions as substitutable."""
-    have_set = set(have)
-    missing = set()
-    for req in required:
-        if req == "_org":
-            if not (have_set & _GITHUB_ORG_SCOPES):
-                missing.add(f"admin:org (or {'/'.join(sorted(_GITHUB_ORG_SCOPES))})")
-        elif req not in have_set:
-            missing.add(req)
-    return missing
-
-
 def check_token_permissions(state: DoctorState) -> List[Finding]:
     """Opt-in network probe: validates each token and reports its scopes.
 
-    Only runs when ``state.check_tokens`` is True. Reports:
-      - ERROR if the host rejects the token (e.g. 401).
-      - WARN if the token is valid but missing a required scope.
-      - OK with the scope list otherwise.
+    Only runs when ``state.check_tokens`` is True. Delegates the actual
+    probe + scope-diff to :mod:`hydra.preflight` (shared with the CLI's
+    pre-mutation preflight); doctor just translates :class:`PreflightFinding`
+    records into ``Finding`` rows with the right ``Level``.
+
     Hosts whose token cannot be resolved are skipped (already warned by
     ``check_token_resolvable``).
     """
     if not state.check_tokens or state.cfg is None:
         return []
-    out: List[Finding] = []
+    tokens: Dict[str, str] = {}
     for host in state.cfg.hosts:
         token = _resolve_token_for_doctor(state, host.id)
-        if token is None:
-            continue
-        try:
-            info = _inspect_for_host(host, token)
-        except HydraAPIError as e:
-            out.append(
-                Finding(
-                    section="Tokens",
-                    level=Level.ERROR,
-                    message=f"{host.id} — token rejected ({e.status_code or '?'}): {e.message}",
-                    details=e.hint or "",
-                )
+        if token is not None:
+            tokens[host.id] = token
+    if not tokens:
+        return []
+
+    report = preflight_mod.check_tokens(state.cfg.hosts, tokens)
+    out: List[Finding] = []
+    for finding in report.errors:
+        out.append(
+            Finding(
+                section="Tokens",
+                level=Level.ERROR if "token rejected" in finding.message else Level.WARN,
+                message=finding.message,
+                details=finding.hint or "",
             )
-            continue
-        if info is None:
-            # Unknown provider kind — note but don't fail.
-            out.append(
-                Finding(
-                    section="Tokens",
-                    level=Level.OK,
-                    message=(
-                        f"{host.id} — no token-introspection probe for kind "
-                        f"{host.kind!r}; permissions not verified"
-                    ),
-                )
+        )
+    for finding in report.warnings + report.oks:
+        out.append(
+            Finding(
+                section="Tokens",
+                level=Level.OK,
+                message=finding.message,
             )
-            continue
-        if not info.scopes_known:
-            out.append(
-                Finding(
-                    section="Tokens",
-                    level=Level.OK,
-                    message=(
-                        f"{host.id} — token valid (scopes not exposed by host; "
-                        f"fine-grained PAT or older GitLab)"
-                    ),
-                )
-            )
-            continue
-        required = _required_scopes_for(host)
-        missing = _missing_scopes(required, info.scopes)
-        if missing:
-            out.append(
-                Finding(
-                    section="Tokens",
-                    level=Level.WARN,
-                    message=(
-                        f"{host.id} — token valid but missing scope(s): "
-                        f"{', '.join(sorted(missing))} (have: {', '.join(info.scopes)})"
-                    ),
-                )
-            )
-        else:
-            line = f"scopes: {', '.join(info.scopes)}"
-            if info.expires_at:
-                line += f"; expires {info.expires_at}"
-            out.append(
-                Finding(
-                    section="Tokens",
-                    level=Level.OK,
-                    message=f"{host.id} — token valid ({line})",
-                )
-            )
+        )
     return out
 
 

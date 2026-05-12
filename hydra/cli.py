@@ -18,6 +18,7 @@ from hydra import __version__, executor, http, planner
 from hydra import doctor as doctor_mod
 from hydra import journal as journal_mod
 from hydra import paths as paths_mod
+from hydra import preflight as preflight_mod
 from hydra import providers as providers_mod
 from hydra import secrets as secrets_mod
 from hydra.config import Config, ConfigError, HostSpec, load_config, resolve_config_path
@@ -142,6 +143,12 @@ def create(
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Skip the confirmation before applying the plan."
     ),
+    skip_preflight: bool = typer.Option(
+        False,
+        "--skip-preflight",
+        help="Skip the pre-mutation token-scope probe. Faster but a "
+        "wrong-scope token may orphan groups/repos before failing.",
+    ),
     config_path: Optional[Path] = typer.Option(None, "--config"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
@@ -181,10 +188,19 @@ def create(
         console.print("[dim]No changes made.[/dim]")
         return
 
-    _execute_create(cfg=cfg, opts=opts, verbose=verbose, console=console)
+    _execute_create(
+        cfg=cfg, opts=opts, verbose=verbose, console=console, skip_preflight=skip_preflight
+    )
 
 
-def _execute_create(*, cfg: Config, opts: CreateOptions, verbose: bool, console: Console) -> None:
+def _execute_create(
+    *,
+    cfg: Config,
+    opts: CreateOptions,
+    verbose: bool,
+    console: Console,
+    skip_preflight: bool = False,
+) -> None:
     """Build a create plan and apply it. Token resolution + error rendering
     happen here so the CLI command stays focused on plan/render/confirm.
 
@@ -199,6 +215,9 @@ def _execute_create(*, cfg: Config, opts: CreateOptions, verbose: bool, console:
     for spec in fork_specs:
         if spec.id not in tokens:
             tokens[spec.id] = _resolve_token_or_die(spec.id, allow_prompt=True, console=console)
+
+    if not skip_preflight:
+        _preflight_or_die(cfg=cfg, tokens=tokens, console=console)
 
     http.reset_retry_stats()
     plan = planner.plan_create(cfg, opts)
@@ -757,6 +776,30 @@ def _render_retry_footer(console: Console) -> None:
     console.print(f"[dim]Retried {total} transient error{suffix} ({hosts}).[/dim]")
 
 
+def _preflight_or_die(*, cfg: Config, tokens: Dict[str, str], console: Console) -> None:
+    """Probe every token before mutating. Exit 1 on any error finding;
+    print warnings inline and continue.
+    """
+    report = preflight_mod.check_tokens(cfg.hosts, tokens)
+    for w in report.warnings:
+        console.print(f"[yellow]⚠ {w.message}[/yellow]")
+    if not report.errors:
+        return
+    console.print()
+    console.print("[bold red]✗ Token preflight failed:[/bold red]")
+    for err in report.errors:
+        console.print(f"  [red]•[/red] {err.message}")
+        if err.hint:
+            for line in err.hint.split("\n"):
+                console.print(f"    [dim]{line}[/dim]")
+    console.print()
+    console.print(
+        "[dim]Pass [bold]--skip-preflight[/bold] to bypass this check "
+        "(may orphan resources on failure).[/dim]"
+    )
+    raise typer.Exit(code=1) from None
+
+
 def _default_scan_namespace(primary_spec: HostSpec, cfg: Config) -> Optional[str]:
     prefix = primary_spec.options.get("managed_group_prefix")
     if prefix:
@@ -1102,8 +1145,9 @@ def rotate_token(
 def _verify_token(spec: HostSpec, token: str, *, console: Optional[Console] = None) -> None:
     """Probe the host using a token. Raises HydraAPIError on failure.
 
-    For unknown provider kinds, no probe runs and a warning is printed so the
-    user knows verification was skipped.
+    Also checks that the token carries the scopes hydra needs (via the
+    shared preflight). For unknown provider kinds, no probe runs and a
+    warning is printed so the user knows verification was skipped.
     """
     if spec.kind == "gitlab":
         from hydra import gitlab as gitlab_api
@@ -1118,6 +1162,21 @@ def _verify_token(spec: HostSpec, token: str, *, console: Optional[Console] = No
             f"[yellow]⚠ no token-verification probe for provider kind "
             f"{spec.kind!r} — skipping pre-flight check.[/yellow]"
         )
+        return
+
+    report = preflight_mod.check_tokens([spec], {spec.id: token})
+    if report.errors:
+        # Surface the first scope-related issue as a HydraAPIError so the
+        # caller's existing _render_api_error path handles it consistently.
+        err = report.errors[0]
+        raise HydraAPIError(
+            message=err.message,
+            host=spec.id,
+            hint=err.hint,
+        )
+    if console is not None:
+        for w in report.warnings:
+            console.print(f"[yellow]⚠ {w.message}[/yellow]")
 
 
 if __name__ == "__main__":
