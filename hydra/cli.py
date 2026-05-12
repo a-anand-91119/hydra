@@ -192,15 +192,14 @@ def create(
 
     plan = planner.plan_create(cfg, opts)
 
-    # Probe what already exists on each host so re-runs don't 409. The
-    # probe needs tokens; resolve them up-front (same set _execute_create
-    # would resolve anyway).
-    existing_repos: Dict[str, RepoRef] = {}
-    existing_mirrors: Dict[str, PrimaryMirror] = {}
+    # Token resolution + preflight are Phase 7 concerns; the existence
+    # probe is Phase 6. Keep the two switches (--skip-preflight, --no-probe)
+    # independent so disabling one doesn't silently disable the other.
+    tokens = _resolve_tokens_or_die(cfg, console=console)
+    if not skip_preflight:
+        _preflight_or_die(cfg=cfg, tokens=tokens, console=console)
+
     if not no_probe:
-        tokens = _resolve_tokens_or_die(cfg, console=console)
-        if not skip_preflight:
-            _preflight_or_die(cfg=cfg, tokens=tokens, console=console)
         existing_repos, existing_mirrors = _probe_existing_state(
             cfg=cfg, opts=opts, tokens=tokens, console=console
         )
@@ -209,13 +208,12 @@ def create(
             opts=opts,
             existing_repos=existing_repos,
             adopt_existing=adopt_existing,
+            dry_run=opts.dry_run,
             console=console,
         )
         plan = planner.plan_create_with_existing(
             plan, existing_repos=existing_repos, existing_mirrors=existing_mirrors
         )
-    else:
-        tokens = None  # _execute_create will resolve on its own
 
     planner.render_plan(plan, console, dry_run=opts.dry_run, title=f"Create '{opts.name}'")
 
@@ -226,12 +224,14 @@ def create(
         console.print("[dim]No changes made.[/dim]")
         return
 
+    # CLI already resolved tokens and ran preflight above; pass both forward
+    # so _execute_create doesn't duplicate either.
     _execute_create(
         cfg=cfg,
         opts=opts,
         verbose=verbose,
         console=console,
-        skip_preflight=skip_preflight,
+        skip_preflight=True,
         plan_override=plan,
         tokens_override=tokens,
     )
@@ -253,16 +253,15 @@ def _execute_create(
     Kept as a public-by-convention helper so existing tests (and the wizard
     callback) can drive the apply without re-prompting. The CLI passes
     ``plan_override`` (the adoption-aware transformed plan) and
-    ``tokens_override`` (already resolved up-front for the probe) when it
-    has them; tests typically pass neither and rely on the plain plan +
-    token resolution here.
+    ``tokens_override`` (already resolved up-front) along with
+    ``skip_preflight=True`` because it already ran preflight; direct test
+    callers pass neither and get token resolution + preflight here.
     """
     tokens = tokens_override if tokens_override is not None else _resolve_tokens_or_die(
         cfg, console=console
     )
 
-    if not skip_preflight and tokens_override is None:
-        # If the caller already preflighted (CLI path), skip the duplicate probe.
+    if not skip_preflight:
         _preflight_or_die(cfg=cfg, tokens=tokens, console=console)
 
     http.reset_retry_stats()
@@ -909,55 +908,75 @@ def _handle_existing_state(
     opts: CreateOptions,
     existing_repos: Dict[str, RepoRef],
     adopt_existing: bool,
+    dry_run: bool,
     console: Console,
 ) -> None:
     """Apply the three resolution branches from Phase 6 of the plan.
 
     - (a) repo exists everywhere AND the journal already records the primary
       → print "already managed" and exit 0.
-    - (b) primary has it but journal is empty → prompt for adoption (skip
-      prompt if ``--adopt-existing``). On decline → exit 1.
+    - (b) primary has it but journal is empty → prompt for adoption
+      (skip prompt under ``--adopt-existing`` or ``--dry-run`` — dry-run
+      assumes adoption so the user can preview the transformed plan).
+      On interactive decline → exit 1.
     - (c) anything else → return; caller transforms the plan with whatever
       is in ``existing_repos``.
+
+    Opens the journal once and reuses the result for both branches.
     """
     primary_id = cfg.primary
     if primary_id not in existing_repos:
         return  # primary doesn't have it — clean create path
 
+    primary_ref = existing_repos[primary_id]
+    journal_has = _journal_records_primary(
+        primary_host_id=primary_id, primary_repo=primary_ref
+    )
+
     # Case (a): all hosts have it AND journal records it.
     all_hosts = {h.id for h in cfg.hosts}
-    if existing_repos.keys() >= all_hosts:
-        journal_has = _journal_records_primary(
-            name=opts.name, primary_host_id=primary_id, primary_repo=existing_repos[primary_id]
+    if existing_repos.keys() >= all_hosts and journal_has:
+        console.print(
+            f"[green]✓[/green] '{opts.name}' already exists on every configured host "
+            f"and is recorded in the journal. Nothing to do."
         )
-        if journal_has:
-            console.print(
-                f"[green]✓[/green] '{opts.name}' already exists on every configured host "
-                f"and is recorded in the journal. Nothing to do."
-            )
-            console.print(f"  [dim]hydra status {opts.name}[/dim]")
-            raise typer.Exit(code=0) from None
+        console.print(f"  [dim]hydra status {opts.name}[/dim]")
+        raise typer.Exit(code=0) from None
 
     # Case (b): primary exists, journal is empty.
-    if not _journal_records_primary(
-        name=opts.name, primary_host_id=primary_id, primary_repo=existing_repos[primary_id]
-    ):
-        primary_url = existing_repos[primary_id].http_url
+    if not journal_has:
         console.print()
         console.print(
             f"[yellow]⚠ '{opts.name}' already exists on {primary_id}[/yellow] "
-            f"([dim]{primary_url}[/dim])"
+            f"([dim]{primary_ref.http_url}[/dim])"
         )
         console.print("  The hydra journal has no record of it.")
+        if dry_run:
+            console.print(
+                "  [dim](dry-run: assuming adoption to render the transformed plan; "
+                "pass --adopt-existing when actually applying.)[/dim]"
+            )
+            return
         if not adopt_existing and not typer.confirm("  Adopt it?", default=False):
-            console.print("[dim]No changes made. Pass --adopt-existing to skip this prompt.[/dim]")
+            console.print(
+                "[dim]Adoption declined; no changes made. "
+                "Pass --adopt-existing to skip this prompt.[/dim]"
+            )
             raise typer.Exit(code=1) from None
 
 
 def _journal_records_primary(
-    *, name: str, primary_host_id: str, primary_repo: RepoRef
+    *, primary_host_id: str, primary_repo: RepoRef
 ) -> bool:
-    """True if the journal already has an entry for this repo + primary host."""
+    """True if the journal already has an entry for this repo + primary host.
+
+    Only swallows :class:`sqlite3.Error` (file-locked, schema mismatch, etc.)
+    where falling through to the adoption branch is the safer default —
+    other exceptions propagate so a real bug doesn't masquerade as
+    "journal empty".
+    """
+    import sqlite3
+
     if primary_repo.project_id is None:
         return False
     try:
@@ -968,7 +987,7 @@ def _journal_records_primary(
                     and repo.primary_repo_id == primary_repo.project_id
                 ):
                     return True
-    except Exception:  # noqa: BLE001 — best-effort
+    except sqlite3.Error:
         return False
     return False
 

@@ -178,7 +178,7 @@ def plan_create_with_existing(
     plan: Plan,
     *,
     existing_repos: Dict[str, RepoRef],
-    existing_mirrors: Dict[str, PrimaryMirror] = None,  # type: ignore[assignment]
+    existing_mirrors: Optional[Dict[str, PrimaryMirror]] = None,
 ) -> Plan:
     """Rewrite a `create` plan to skip work that already exists.
 
@@ -190,7 +190,8 @@ def plan_create_with_existing(
     Other actions (``ensure_namespace``, journal records, etc.) are left
     untouched — namespaces are idempotent on GitLab and no-ops on GitHub.
     """
-    existing_mirrors = existing_mirrors or {}
+    if existing_mirrors is None:
+        existing_mirrors = {}
     out: List[Action] = []
     for action in plan.actions:
         if action.kind == "create_repo" and action.host_id in existing_repos:

@@ -225,7 +225,7 @@ class TestDryRunAndConfirm:
         monkeypatch.setattr(cli_mod, "_load_or_die", lambda *a, **k: cfg)
         runner = CliRunner()
         result = runner.invoke(
-            cli_mod.app, ["create", "probe", "--dry-run", "--no-probe"]
+            cli_mod.app, ["create", "probe", "--dry-run", "--no-probe", "--skip-preflight"]
         )
         assert result.exit_code == 0, result.output
         patches["gl_create"].assert_not_called()
@@ -241,7 +241,9 @@ class TestDryRunAndConfirm:
         monkeypatch.setattr(cli_mod, "_load_or_die", lambda *a, **k: cfg)
         runner = CliRunner()
         result = runner.invoke(
-            cli_mod.app, ["create", "probe", "--no-probe"], input="n\n"
+            cli_mod.app,
+            ["create", "probe", "--no-probe", "--skip-preflight"],
+            input="n\n",
         )
         assert result.exit_code == 0, result.output
         assert "No changes made" in result.output

@@ -141,7 +141,7 @@ class TestAdoptionPrompt:
         runner = CliRunner()
         result = runner.invoke(cli_mod.app, ["create", "probe"], input="n\n")
         assert result.exit_code == 1, result.output
-        assert "No changes made" in result.output
+        assert "Adoption declined" in result.output
         patches["gl_create"].assert_not_called()
 
     def test_adopt_existing_flag_skips_prompt(self, cfg, patches):
@@ -241,3 +241,97 @@ class TestDryRunWithExistingState:
         assert "skip_create_repo" in result.output
         # And does not attempt the real create.
         patches["gl_create"].assert_not_called()
+
+    def test_dry_run_skips_adoption_prompt(self, cfg, patches):
+        """--dry-run with primary-exists must NOT block on input — the user
+        should be able to preview the transformed plan before committing.
+        """
+        patches["gl_find"].side_effect = [
+            RepoRef(http_url="https://primary.example/probe.git", project_id=100, namespace_path=None),
+            None,
+        ]
+        runner = CliRunner()
+        # No --adopt-existing AND no input on stdin — if the prompt fires,
+        # CliRunner would hang or error.
+        result = runner.invoke(cli_mod.app, ["create", "probe", "--dry-run"])
+        assert result.exit_code == 0, result.output
+        assert "Adopt it?" not in result.output
+        assert "dry-run: assuming adoption" in result.output
+        assert "skip_create_repo" in result.output
+
+
+class TestPreflightProbeDecoupling:
+    """The --no-probe and --skip-preflight flags must be independent."""
+
+    def test_no_probe_alone_does_not_disable_preflight(self, cfg, patches):
+        """--no-probe should bypass find_repo calls but still run preflight."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_mod.app, ["create", "probe", "--yes", "--no-probe"]
+        )
+        # Preflight (mocked in `patches`) was called; find_repo was not.
+        assert result.exit_code == 0, result.output
+        patches["gl_find"].assert_not_called()
+        # Real provider mutations still ran (plan unchanged by probe).
+        assert patches["gl_create"].call_count == 2
+
+
+class TestProbeFailure:
+    """A find_repo HydraAPIError on one host should not abort the flow."""
+
+    def test_probe_failure_falls_through_to_create(self, cfg, patches):
+        from hydra.errors import HydraAPIError
+
+        # Primary probe explodes; fork probe says nothing exists.
+        patches["gl_find"].side_effect = [
+            HydraAPIError(message="probe blew up", host="primary", status_code=500),
+            None,
+        ]
+        # Plan proceeds as if neither host had it — both creates fire.
+        runner = CliRunner()
+        result = runner.invoke(cli_mod.app, ["create", "probe", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert "existence probe failed" in result.output
+        assert patches["gl_create"].call_count == 2
+
+
+class TestJournalCorruption:
+    """A locked / corrupted journal should not silently route to adoption."""
+
+    def test_journal_records_primary_treats_sqlite_error_as_empty(self, cfg, monkeypatch):
+        """The targeted exception is sqlite3.Error — unrelated exceptions
+        must propagate so a real bug isn't masked as "journal empty".
+        """
+        import sqlite3
+        from contextlib import contextmanager
+
+        from hydra import journal as journal_mod_local
+        from hydra.cli import _journal_records_primary
+
+        # sqlite3.Error → False (best-effort fallback OK).
+        @contextmanager
+        def broken_journal():
+            raise sqlite3.Error("locked")
+            yield  # unreachable
+
+        monkeypatch.setattr(journal_mod_local, "journal", broken_journal)
+        assert (
+            _journal_records_primary(
+                primary_host_id="primary",
+                primary_repo=RepoRef(http_url="x", project_id=1, namespace_path=None),
+            )
+            is False
+        )
+
+        # An unrelated ValueError must NOT be swallowed.
+        @contextmanager
+        def bug_journal():
+            raise ValueError("unexpected bug")
+            yield
+
+        monkeypatch.setattr(journal_mod_local, "journal", bug_journal)
+        with pytest.raises(ValueError):
+            _journal_records_primary(
+                primary_host_id="primary",
+                primary_repo=RepoRef(http_url="x", project_id=1, namespace_path=None),
+            )
