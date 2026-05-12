@@ -79,9 +79,7 @@ def add_mirror(
 
 def list_mirrors(*, host_id: str, base_url: str, token: str, project_id: int) -> List[Mirror]:
     headers = {"PRIVATE-TOKEN": token}
-    response = http.get(
-        f"{base_url}/api/v4/projects/{project_id}/remote_mirrors", headers=headers
-    )
+    response = http.get(f"{base_url}/api/v4/projects/{project_id}/remote_mirrors", headers=headers)
     raise_for_response(
         response,
         host=host_id,

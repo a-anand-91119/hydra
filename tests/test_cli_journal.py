@@ -721,9 +721,7 @@ class TestRotateToken:
         # --skip-verify bypasses the preflight too (same code path).
         preflight.assert_not_called()
 
-    def test_rotate_token_bails_on_scope_mismatch_before_keyring_write(
-        self, cfg, seeded_journal
-    ):
+    def test_rotate_token_bails_on_scope_mismatch_before_keyring_write(self, cfg, seeded_journal):
         """If preflight's scope check fails, secrets.set_token must NOT be called."""
         from hydra.preflight import PreflightFinding, PreflightReport
 

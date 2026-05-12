@@ -257,8 +257,10 @@ def _execute_create(
     ``skip_preflight=True`` because it already ran preflight; direct test
     callers pass neither and get token resolution + preflight here.
     """
-    tokens = tokens_override if tokens_override is not None else _resolve_tokens_or_die(
-        cfg, console=console
+    tokens = (
+        tokens_override
+        if tokens_override is not None
+        else _resolve_tokens_or_die(cfg, console=console)
     )
 
     if not skip_preflight:
@@ -267,9 +269,7 @@ def _execute_create(
     http.reset_retry_stats()
     plan = plan_override if plan_override is not None else planner.plan_create(cfg, opts)
     try:
-        result = executor.apply_plan(
-            plan, cfg=cfg, tokens=tokens, console=console, verbose=verbose
-        )
+        result = executor.apply_plan(plan, cfg=cfg, tokens=tokens, console=console, verbose=verbose)
         if not result.ok:
             err = result.error
             if isinstance(err, HydraAPIError):
@@ -929,9 +929,7 @@ def _handle_existing_state(
         return  # primary doesn't have it — clean create path
 
     primary_ref = existing_repos[primary_id]
-    journal_has = _journal_records_primary(
-        primary_host_id=primary_id, primary_repo=primary_ref
-    )
+    journal_has = _journal_records_primary(primary_host_id=primary_id, primary_repo=primary_ref)
 
     # Case (a): all hosts have it AND journal records it.
     all_hosts = {h.id for h in cfg.hosts}
@@ -965,9 +963,7 @@ def _handle_existing_state(
             raise typer.Exit(code=1) from None
 
 
-def _journal_records_primary(
-    *, primary_host_id: str, primary_repo: RepoRef
-) -> bool:
+def _journal_records_primary(*, primary_host_id: str, primary_repo: RepoRef) -> bool:
     """True if the journal already has an entry for this repo + primary host.
 
     Only swallows :class:`sqlite3.Error` (file-locked, schema mismatch, etc.)

@@ -51,23 +51,17 @@ def runner() -> CliRunner:
 
 
 class TestRotatePrimary:
-    def test_primary_token_short_circuits_after_verify(
-        self, config_path, runner, requests_mock
-    ):
+    def test_primary_token_short_circuits_after_verify(self, config_path, runner, requests_mock):
         # _verify_token probes GET /user, then preflight probes
         # /personal_access_tokens/self. Both must succeed.
-        requests_mock.get(
-            "https://primary.example/api/v4/user", json={"id": 1, "username": "x"}
-        )
+        requests_mock.get("https://primary.example/api/v4/user", json={"id": 1, "username": "x"})
         requests_mock.get(
             "https://primary.example/api/v4/personal_access_tokens/self",
             json=gitlab_pat_self(["api"]),
         )
         # Keyring write is the only real side effect — patch to avoid OS Keychain.
         with patch("hydra.secrets.set_token") as set_tok:
-            result = runner.invoke(
-                cli_mod.app, ["rotate-token", "primary", "--token", "new-tok"]
-            )
+            result = runner.invoke(cli_mod.app, ["rotate-token", "primary", "--token", "new-tok"])
         assert result.exit_code == 0, result.output
         set_tok.assert_called_once_with("primary", "new-tok")
         # Primary rotation must NOT touch any mirror.
@@ -81,9 +75,7 @@ class TestRotateFork:
     ):
         # _verify_token's /user probe + preflight's /user probe (both GitHub).
         body, headers = github_user()
-        requests_mock.get(
-            "https://api.github.com/user", json=body, headers=headers
-        )
+        requests_mock.get("https://api.github.com/user", json=body, headers=headers)
         # Mirror replace = DELETE old, POST new.
         requests_mock.delete(
             "https://primary.example/api/v4/projects/10/remote_mirrors/501",
@@ -95,9 +87,7 @@ class TestRotateFork:
         )
 
         with patch("hydra.secrets.set_token"):
-            result = runner.invoke(
-                cli_mod.app, ["rotate-token", "fork_gh", "--token", "ghp_new"]
-            )
+            result = runner.invoke(cli_mod.app, ["rotate-token", "fork_gh", "--token", "ghp_new"])
         assert result.exit_code == 0, result.output
         # Journal updated to new push id.
         with journal_mod.journal() as j:

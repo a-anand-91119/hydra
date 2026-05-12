@@ -172,7 +172,9 @@ class TestFindRepo:
     def test_github_find_repo_handles_404(self, monkeypatch):
         from hydra import github as github_api
 
-        spec = HostSpec(id="gh", kind="github", url="https://api.github.com", options={"org": "acme"})
+        spec = HostSpec(
+            id="gh", kind="github", url="https://api.github.com", options={"org": "acme"}
+        )
         prov = get("github")(spec)
         monkeypatch.setattr(github_api, "find_repo", lambda **kw: None)
         assert prov.find_repo(token="t", name="probe", namespace=None) is None
@@ -180,7 +182,9 @@ class TestFindRepo:
     def test_github_find_repo_uses_org_when_configured(self, monkeypatch):
         from hydra import github as github_api
 
-        spec = HostSpec(id="gh", kind="github", url="https://api.github.com", options={"org": "acme"})
+        spec = HostSpec(
+            id="gh", kind="github", url="https://api.github.com", options={"org": "acme"}
+        )
         prov = get("github")(spec)
 
         captured = {}

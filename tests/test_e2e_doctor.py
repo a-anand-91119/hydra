@@ -43,9 +43,7 @@ class TestDoctor:
         assert result.exit_code in (0, 1), result.output
         assert "Config" in result.output
 
-    def test_check_tokens_reports_missing_scope(
-        self, config_path, runner, requests_mock
-    ):
+    def test_check_tokens_reports_missing_scope(self, config_path, runner, requests_mock):
         # Primary token only has read_api → doctor surfaces a WARN finding.
         requests_mock.get(
             "https://primary.example/api/v4/personal_access_tokens/self",
@@ -64,9 +62,7 @@ class TestDoctor:
         assert "missing scope" in result.output
         assert "primary" in result.output
 
-    def test_check_tokens_all_valid_no_warnings(
-        self, config_path, runner, requests_mock
-    ):
+    def test_check_tokens_all_valid_no_warnings(self, config_path, runner, requests_mock):
         requests_mock.get(
             "https://primary.example/api/v4/personal_access_tokens/self",
             json=gitlab_pat_self(["api"]),

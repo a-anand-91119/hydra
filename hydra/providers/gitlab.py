@@ -176,9 +176,7 @@ class GitLabProvider:
             return None
         return RepoRef(http_url="", project_id=pid, namespace_path=None)
 
-    def find_repo(
-        self, *, token: str, name: str, namespace: Optional[str]
-    ) -> Optional[RepoRef]:
+    def find_repo(self, *, token: str, name: str, namespace: Optional[str]) -> Optional[RepoRef]:
         full_group = self._effective_group_path(namespace)
         repo_path = f"{full_group}/{name}" if full_group else name
         payload = mirrors_api.find_project(

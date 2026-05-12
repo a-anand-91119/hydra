@@ -59,9 +59,7 @@ def get_authenticated_login(*, base_url: str, token: str) -> str:
     return str(response.json().get("login") or "")
 
 
-def find_repo(
-    *, base_url: str, token: str, owner: str, name: str
-) -> Optional[str]:
+def find_repo(*, base_url: str, token: str, owner: str, name: str) -> Optional[str]:
     """Look up a repo by owner/name. Returns ``clone_url`` on 200, None on 404."""
     headers = {
         "Authorization": f"token {token}",

@@ -87,7 +87,9 @@ class TestAllHostsHaveRepo:
     def test_all_hosts_have_repo_and_journal_matches_is_noop(self, cfg, patches, tmp_path):
         # Both hosts return an existing RepoRef…
         patches["gl_find"].side_effect = [
-            RepoRef(http_url="https://primary.example/probe.git", project_id=100, namespace_path=None),
+            RepoRef(
+                http_url="https://primary.example/probe.git", project_id=100, namespace_path=None
+            ),
             RepoRef(http_url="https://gitlab.com/probe.git", project_id=200, namespace_path=None),
         ]
         # …and the journal already records the primary.
@@ -100,9 +102,7 @@ class TestAllHostsHaveRepo:
             )
 
         runner = CliRunner()
-        result = runner.invoke(
-            cli_mod.app, ["create", "probe", "--yes"]
-        )
+        result = runner.invoke(cli_mod.app, ["create", "probe", "--yes"])
         assert result.exit_code == 0, result.output
         assert "already exists on every configured host" in result.output
         patches["gl_create"].assert_not_called()
@@ -113,7 +113,9 @@ class TestAdoptionPrompt:
     def test_primary_exists_journal_empty_offers_adoption_accept(self, cfg, patches):
         # Primary exists, fork doesn't.
         patches["gl_find"].side_effect = [
-            RepoRef(http_url="https://primary.example/probe.git", project_id=100, namespace_path=None),
+            RepoRef(
+                http_url="https://primary.example/probe.git", project_id=100, namespace_path=None
+            ),
             None,
         ]
         patches["gl_create"].side_effect = [
@@ -121,9 +123,7 @@ class TestAdoptionPrompt:
         ]
         runner = CliRunner()
         # Two y's: first to adopt, second to confirm the transformed plan.
-        result = runner.invoke(
-            cli_mod.app, ["create", "probe"], input="y\ny\n"
-        )
+        result = runner.invoke(cli_mod.app, ["create", "probe"], input="y\ny\n")
         assert result.exit_code == 0, result.output
         assert "already exists on primary" in result.output
         # Primary is adopted → skip_create_repo, only fork actually created.
@@ -136,7 +136,9 @@ class TestAdoptionPrompt:
 
     def test_primary_exists_journal_empty_decline_exits_1(self, cfg, patches):
         patches["gl_find"].side_effect = [
-            RepoRef(http_url="https://primary.example/probe.git", project_id=100, namespace_path=None),
+            RepoRef(
+                http_url="https://primary.example/probe.git", project_id=100, namespace_path=None
+            ),
             None,
         ]
         runner = CliRunner()
@@ -147,7 +149,9 @@ class TestAdoptionPrompt:
 
     def test_adopt_existing_flag_skips_prompt(self, cfg, patches):
         patches["gl_find"].side_effect = [
-            RepoRef(http_url="https://primary.example/probe.git", project_id=100, namespace_path=None),
+            RepoRef(
+                http_url="https://primary.example/probe.git", project_id=100, namespace_path=None
+            ),
             None,
         ]
         patches["gl_create"].side_effect = [
@@ -156,9 +160,7 @@ class TestAdoptionPrompt:
         runner = CliRunner()
         # Just one y for the apply-plan confirm — no adoption prompt because
         # --adopt-existing was passed.
-        result = runner.invoke(
-            cli_mod.app, ["create", "probe", "--adopt-existing"], input="y\n"
-        )
+        result = runner.invoke(cli_mod.app, ["create", "probe", "--adopt-existing"], input="y\n")
         assert result.exit_code == 0, result.output
         # No "Adopt it?" prompt in the output.
         assert "Adopt it?" not in result.output
@@ -175,9 +177,7 @@ class TestPartialState:
             CreatedRepo(http_url="https://primary.example/probe.git", project_id=100),
         ]
         runner = CliRunner()
-        result = runner.invoke(
-            cli_mod.app, ["create", "probe", "--yes"]
-        )
+        result = runner.invoke(cli_mod.app, ["create", "probe", "--yes"])
         assert result.exit_code == 0, result.output
         # Only one create_repo call — the primary.
         assert patches["gl_create"].call_count == 1
@@ -189,7 +189,9 @@ class TestExistingMirror:
     def test_existing_mirror_skips_add_mirror(self, cfg, patches):
         # Both hosts already have the repo…
         patches["gl_find"].side_effect = [
-            RepoRef(http_url="https://primary.example/probe.git", project_id=100, namespace_path=None),
+            RepoRef(
+                http_url="https://primary.example/probe.git", project_id=100, namespace_path=None
+            ),
             RepoRef(http_url="https://gitlab.com/probe.git", project_id=200, namespace_path=None),
         ]
         # …and the primary already has a push-mirror to the fork.
@@ -205,9 +207,7 @@ class TestExistingMirror:
         ]
         runner = CliRunner()
         # adopt + apply plan
-        result = runner.invoke(
-            cli_mod.app, ["create", "probe", "--adopt-existing", "--yes"]
-        )
+        result = runner.invoke(cli_mod.app, ["create", "probe", "--adopt-existing", "--yes"])
         assert result.exit_code == 0, result.output
         assert "skip_add_mirror" in result.output
         patches["mi_add"].assert_not_called()
@@ -230,13 +230,13 @@ class TestNoProbeFlag:
 class TestDryRunWithExistingState:
     def test_dry_run_renders_transformed_plan(self, cfg, patches):
         patches["gl_find"].side_effect = [
-            RepoRef(http_url="https://primary.example/probe.git", project_id=100, namespace_path=None),
+            RepoRef(
+                http_url="https://primary.example/probe.git", project_id=100, namespace_path=None
+            ),
             None,
         ]
         runner = CliRunner()
-        result = runner.invoke(
-            cli_mod.app, ["create", "probe", "--dry-run", "--adopt-existing"]
-        )
+        result = runner.invoke(cli_mod.app, ["create", "probe", "--dry-run", "--adopt-existing"])
         assert result.exit_code == 0, result.output
         # The dry-run still shows the transformed plan with skip rows.
         assert "skip_create_repo" in result.output
@@ -248,7 +248,9 @@ class TestDryRunWithExistingState:
         should be able to preview the transformed plan before committing.
         """
         patches["gl_find"].side_effect = [
-            RepoRef(http_url="https://primary.example/probe.git", project_id=100, namespace_path=None),
+            RepoRef(
+                http_url="https://primary.example/probe.git", project_id=100, namespace_path=None
+            ),
             None,
         ]
         runner = CliRunner()
@@ -267,9 +269,7 @@ class TestPreflightProbeDecoupling:
     def test_no_probe_alone_does_not_disable_preflight(self, cfg, patches):
         """--no-probe should bypass find_repo calls but still run preflight."""
         runner = CliRunner()
-        result = runner.invoke(
-            cli_mod.app, ["create", "probe", "--yes", "--no-probe"]
-        )
+        result = runner.invoke(cli_mod.app, ["create", "probe", "--yes", "--no-probe"])
         assert result.exit_code == 0, result.output
         # The whole point of the fix: --no-probe DOES NOT short-circuit preflight.
         patches["preflight"].assert_called_once()
@@ -280,9 +280,7 @@ class TestPreflightProbeDecoupling:
     def test_skip_preflight_alone_does_not_disable_probe(self, cfg, patches):
         """And conversely: --skip-preflight should leave the probe running."""
         runner = CliRunner()
-        result = runner.invoke(
-            cli_mod.app, ["create", "probe", "--yes", "--skip-preflight"]
-        )
+        result = runner.invoke(cli_mod.app, ["create", "probe", "--yes", "--skip-preflight"])
         assert result.exit_code == 0, result.output
         patches["preflight"].assert_not_called()
         # Probe fired against both hosts.

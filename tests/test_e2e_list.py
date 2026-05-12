@@ -70,9 +70,7 @@ class TestList:
         assert payload[0]["name"] == "alpha"
         assert payload[0]["primary_repo_id"] == 10
 
-    def test_refresh_hits_primary_and_updates_status(
-        self, config_path, runner, requests_mock
-    ):
+    def test_refresh_hits_primary_and_updates_status(self, config_path, runner, requests_mock):
         with journal_mod.journal() as j:
             repo_id = j.record_repo(
                 name="alpha",

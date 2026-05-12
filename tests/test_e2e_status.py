@@ -29,9 +29,7 @@ class TestStatus:
     def test_existing_repo_prints_mirror_table(self, config_path, runner, requests_mock):
         # find_project for "team/alpha" returns id=42.
         encoded = quote("team/alpha", safe="")
-        requests_mock.get(
-            f"https://primary.example/api/v4/projects/{encoded}", json={"id": 42}
-        )
+        requests_mock.get(f"https://primary.example/api/v4/projects/{encoded}", json={"id": 42})
         requests_mock.get(
             "https://primary.example/api/v4/projects/42/remote_mirrors",
             json=[

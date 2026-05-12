@@ -123,9 +123,7 @@ class TestScanDrift:
             mirrors_by_pid={10: [{"id": 501, "url": "https://gitlab.com/team/alpha.git"}]},
         )
 
-        result = runner.invoke(
-            cli_mod.app, ["scan", "--namespace", "team", "--apply", "--yes"]
-        )
+        result = runner.invoke(cli_mod.app, ["scan", "--namespace", "team", "--apply", "--yes"])
         assert result.exit_code == 0, result.output
         with journal_mod.journal() as j:
             rows = j.list_repos()

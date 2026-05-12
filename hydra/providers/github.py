@@ -71,9 +71,7 @@ class GitHubProvider:
         )
         return RepoRef(http_url=url, project_id=None, namespace_path=self._org())
 
-    def find_repo(
-        self, *, token: str, name: str, namespace: Optional[str]
-    ) -> Optional[RepoRef]:
+    def find_repo(self, *, token: str, name: str, namespace: Optional[str]) -> Optional[RepoRef]:
         # GitHub doesn't use `namespace` — the host's org option determines
         # the owner. Accept the kwarg to keep the Provider contract uniform.
         del namespace

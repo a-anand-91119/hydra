@@ -177,9 +177,7 @@ class TestCountingRetry:
         bumps = 0
         while True:
             try:
-                cur = cur.increment(
-                    method="GET", url="https://h.example/a", error=Exception("y")
-                )
+                cur = cur.increment(method="GET", url="https://h.example/a", error=Exception("y"))
                 bumps += 1
             except Exception:
                 # MaxRetryError — must NOT have bumped the counter on this call.

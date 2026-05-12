@@ -90,16 +90,18 @@ class TestGoldenPath:
 
         # Verify the real outbound calls happened.
         history = requests_mock.request_history
-        created_repos = [h for h in history if h.method == "POST" and "projects" in h.url and "remote_mirrors" not in h.url]
+        created_repos = [
+            h
+            for h in history
+            if h.method == "POST" and "projects" in h.url and "remote_mirrors" not in h.url
+        ]
         assert len(created_repos) == 2  # primary + gitlab.com
         assert any(h.url.endswith("/user/repos") for h in history)
         # Two mirror creates on the primary.
         mirror_posts = [h for h in history if h.method == "POST" and "remote_mirrors" in h.url]
         assert len(mirror_posts) == 2
 
-    def test_clean_create_with_dry_run_makes_no_mutations(
-        self, config_path, runner, requests_mock
-    ):
+    def test_clean_create_with_dry_run_makes_no_mutations(self, config_path, runner, requests_mock):
         register_preflight_ok(requests_mock)
         register_find_repo_not_found(requests_mock, repo_name="probe", group="")
         # Intentionally do NOT wire any POST endpoints. If the executor ran,
@@ -131,18 +133,14 @@ class TestAdoption:
                 "web_url": "https://primary.example/probe",
             },
         )
-        requests_mock.get(
-            f"https://gitlab.com/api/v4/projects/{encoded}", status_code=404, json={}
-        )
+        requests_mock.get(f"https://gitlab.com/api/v4/projects/{encoded}", status_code=404, json={})
         requests_mock.get(
             "https://api.github.com/repos/octocat/probe",
             status_code=404,
             json={"message": "Not Found"},
         )
         # Primary has no mirrors configured yet.
-        requests_mock.get(
-            "https://primary.example/api/v4/projects/100/remote_mirrors", json=[]
-        )
+        requests_mock.get("https://primary.example/api/v4/projects/100/remote_mirrors", json=[])
         # Forks will be created (skip-create for primary), mirrors added.
         requests_mock.post(
             "https://gitlab.com/api/v4/projects",
@@ -197,9 +195,7 @@ class TestAdoption:
             json={"clone_url": "https://github.com/octocat/probe.git", "name": "probe"},
         )
         # Primary's existing mirrors are probed when primary is found.
-        requests_mock.get(
-            "https://primary.example/api/v4/projects/100/remote_mirrors", json=[]
-        )
+        requests_mock.get("https://primary.example/api/v4/projects/100/remote_mirrors", json=[])
         # And the journal already records the primary.
         with journal_mod.journal() as j:
             j.record_repo(
@@ -221,9 +217,7 @@ class TestAdoption:
 
 
 class TestPreflightFailure:
-    def test_missing_api_scope_aborts_before_any_mutation(
-        self, config_path, runner, requests_mock
-    ):
+    def test_missing_api_scope_aborts_before_any_mutation(self, config_path, runner, requests_mock):
         # Primary token has only `read_api` — missing `api`.
         requests_mock.get(
             "https://primary.example/api/v4/personal_access_tokens/self",
@@ -252,9 +246,7 @@ class TestPreflightFailure:
         ]
         assert non_preflight == [], f"unexpected calls after preflight: {non_preflight}"
 
-    def test_skip_preflight_lets_bad_token_through(
-        self, config_path, runner, requests_mock
-    ):
+    def test_skip_preflight_lets_bad_token_through(self, config_path, runner, requests_mock):
         # Primary token is missing api scope — but --skip-preflight should
         # bypass the check entirely so the next mutation gets a chance to fail.
         # No preflight endpoints registered; probe + creates wired normally.

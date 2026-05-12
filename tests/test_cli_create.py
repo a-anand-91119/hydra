@@ -321,13 +321,12 @@ class TestNForks:
 class TestPreflight:
     """Phase 7: pre-mutation token-scope check."""
 
-    def test_create_bails_when_primary_token_lacks_api_scope(
-        self, cfg, opts, console, patches
-    ):
+    def test_create_bails_when_primary_token_lacks_api_scope(self, cfg, opts, console, patches):
         import click
 
         from hydra import cli as cli_mod_local
         from hydra import preflight
+
         _stub_happy(patches)
 
         bad = preflight.PreflightReport(
@@ -353,23 +352,25 @@ class TestPreflight:
 
     def test_create_proceeds_when_all_tokens_valid(self, cfg, opts, console, patches):
         from hydra import preflight
+
         _stub_happy(patches)
 
         with patch(
             "hydra.cli.preflight_mod.check_tokens",
             return_value=preflight.PreflightReport(
-                oks=[preflight.PreflightFinding(host_id=h, message=f"{h} — ok") for h in
-                     ("self_hosted_gitlab", "gitlab", "github")]
+                oks=[
+                    preflight.PreflightFinding(host_id=h, message=f"{h} — ok")
+                    for h in ("self_hosted_gitlab", "gitlab", "github")
+                ]
             ),
         ):
             _execute_create(cfg=cfg, opts=opts, verbose=False, console=console)
         assert patches["gl_create"].call_count == 2
         assert patches["gh_create"].call_count == 1
 
-    def test_create_warns_but_proceeds_on_unknown_scopes(
-        self, cfg, opts, console, patches
-    ):
+    def test_create_warns_but_proceeds_on_unknown_scopes(self, cfg, opts, console, patches):
         from hydra import preflight
+
         _stub_happy(patches)
 
         with patch(
@@ -391,7 +392,5 @@ class TestPreflight:
     def test_skip_preflight_bypasses_check(self, cfg, opts, console, patches):
         _stub_happy(patches)
         with patch("hydra.cli.preflight_mod.check_tokens") as check:
-            _execute_create(
-                cfg=cfg, opts=opts, verbose=False, console=console, skip_preflight=True
-            )
+            _execute_create(cfg=cfg, opts=opts, verbose=False, console=console, skip_preflight=True)
         check.assert_not_called()
