@@ -222,7 +222,7 @@ class TestDryRunAndConfirm:
         from hydra import cli as cli_mod
 
         self._setup(patches)
-        monkeypatch.setattr(cli_mod, "_load_or_die", lambda *a, **k: cfg)
+        monkeypatch.setattr(cli_mod._common, "_load_or_die", lambda *a, **k: cfg)
         runner = CliRunner()
         result = runner.invoke(
             cli_mod.app, ["create", "probe", "--dry-run", "--no-probe", "--skip-preflight"]
@@ -238,7 +238,7 @@ class TestDryRunAndConfirm:
         from hydra import cli as cli_mod
 
         self._setup(patches)
-        monkeypatch.setattr(cli_mod, "_load_or_die", lambda *a, **k: cfg)
+        monkeypatch.setattr(cli_mod._common, "_load_or_die", lambda *a, **k: cfg)
         runner = CliRunner()
         result = runner.invoke(
             cli_mod.app,
@@ -261,7 +261,7 @@ class TestDryRunAndConfirm:
             CreatedRepo(http_url="https://b.example/probe.git", project_id=22),
         ]
         patches["mi_add"].side_effect = [{"id": 91}, {"id": 92}]
-        monkeypatch.setattr(cli_mod, "_load_or_die", lambda *a, **k: cfg)
+        monkeypatch.setattr(cli_mod._common, "_load_or_die", lambda *a, **k: cfg)
         # patches["..."] already stubs secrets.get_token via hydra.cli.secrets_mod
         runner = CliRunner()
         result = runner.invoke(

@@ -55,8 +55,8 @@ ignore = ["E501", "UP006", "UP007", "UP035", "UP045"]
 [tool.ruff.lint.per-file-ignores]
 # Typer requires `typer.Option(...)` as parameter defaults (B008) and
 # evaluates annotations at runtime via get_type_hints, which can't resolve
-# `X | None` on Python 3.9 (UP007/UP045). Keep cli.py compatible.
-"hydra/cli.py" = ["B008", "UP007", "UP045"]
+# `X | None` on Python 3.9 (UP007/UP045). Keep CLI command modules compatible.
+"hydra/cli/*.py" = ["B008", "UP007", "UP045"]
 
 [tool.coverage.run]
 source = ["hydra"]

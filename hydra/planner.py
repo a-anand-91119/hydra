@@ -16,12 +16,12 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional
-from urllib.parse import urlparse
 
 from rich.console import Console
 from rich.table import Table
 
-from hydra.config import Config, HostSpec
+from hydra.config import Config
+from hydra.hostspec_utils import match_fork
 from hydra.journal import ScanDiff
 from hydra.providers.base import PrimaryMirror, PrimaryProject, RepoRef
 
@@ -272,7 +272,7 @@ def plan_scan_apply(
             )
         )
         for m in proj.mirrors:
-            fork = _match_fork(m.url, fork_specs)
+            fork = match_fork(m.url, fork_specs)
             if fork is None:
                 # Reporting-only — we still surface skipped mirrors at execute
                 # time. Don't emit a no-op action.
@@ -297,7 +297,7 @@ def plan_scan_apply(
             continue
         j_by_host = {jm.target_host_id: jm for jm in jrepo.mirrors}
         for m in proj.mirrors:
-            fork = _match_fork(m.url, fork_specs)
+            fork = match_fork(m.url, fork_specs)
             if fork is None or fork.id not in j_by_host:
                 continue
             jm = j_by_host[fork.id]
@@ -340,39 +340,6 @@ def render_plan(
     pretty = ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
     suffix = "  [dim](dry-run — no changes made)[/dim]" if dry_run else ""
     console.print(f"[dim]{pretty}[/dim]{suffix}")
-
-
-# ── Helpers ──────────────────────────────────────────────────────────────
-
-
-def _spec_mirror_hostname(spec: HostSpec) -> Optional[str]:
-    """Same logic as cli._spec_mirror_hostname — duplicated here to keep the
-    planner free of CLI dependencies. Both modules answer the same question:
-    *what hostname does this host's git URL use?*
-    """
-    try:
-        host = (urlparse(spec.url).hostname or "").lower()
-    except ValueError:
-        return None
-    if not host:
-        return None
-    if spec.kind == "github" and host == "api.github.com":
-        return "github.com"
-    return host
-
-
-def _match_fork(mirror_url: str, forks: List[HostSpec]) -> Optional[HostSpec]:
-    try:
-        mirror_host = (urlparse(mirror_url).hostname or "").lower()
-    except ValueError:
-        return None
-    if not mirror_host:
-        return None
-    for spec in forks:
-        spec_host = _spec_mirror_hostname(spec)
-        if spec_host and spec_host == mirror_host:
-            return spec
-    return None
 
 
 # Forward reference resolution. CreateOptions lives in hydra.wizard; keep this

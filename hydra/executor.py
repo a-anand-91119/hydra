@@ -24,6 +24,7 @@ from hydra.config import Config
 from hydra.errors import HydraAPIError
 from hydra.planner import Action, Plan
 from hydra.providers.base import MirrorSource, RepoRef
+from hydra.utils import safe_int
 
 
 @dataclass
@@ -241,7 +242,7 @@ def _h_journal_record_mirror(ctx: _Ctx, action: Action) -> None:
         target_repo: Optional[RepoRef] = ctx.symbols.get(target_ref) if target_ref else None
         mirror_payload = ctx.symbols.get(f"mirror:{payload['target_host_id']}", {})
         target_repo_url = target_repo.http_url if target_repo else ""
-        push_mirror_id = _safe_int(mirror_payload.get("id"))
+        push_mirror_id = safe_int(mirror_payload.get("id"))
         if push_mirror_id is None:
             ctx.result.notes.append(f"no push_mirror_id returned for {payload['target_host_id']}")
             return
@@ -261,13 +262,6 @@ def _h_journal_update_push_id(ctx: _Ctx, action: Action) -> None:
         mirror_db_id=int(action.payload["mirror_db_id"]),
         new_push_mirror_id=int(action.payload["new_push_mirror_id"]),
     )
-
-
-def _safe_int(value: Any) -> Optional[int]:
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
 
 
 __all__ = ["ApplyResult", "apply_plan"]

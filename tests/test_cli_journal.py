@@ -85,14 +85,14 @@ def seeded_journal(tmp_path: Path, monkeypatch):
 class TestListCommand:
     def test_empty_journal(self, cfg):
         runner = CliRunner()
-        with patch.object(cli_mod, "_load_or_die", return_value=cfg):
+        with patch.object(cli_mod._common, "_load_or_die", return_value=cfg):
             result = runner.invoke(cli_mod.app, ["list"])
         assert result.exit_code == 0, result.output
         assert "No tracked repos" in result.output
 
     def test_lists_seeded_repos(self, cfg, seeded_journal):
         runner = CliRunner()
-        with patch.object(cli_mod, "_load_or_die", return_value=cfg):
+        with patch.object(cli_mod._common, "_load_or_die", return_value=cfg):
             result = runner.invoke(cli_mod.app, ["list"])
         assert result.exit_code == 0, result.output
         assert "probe" in result.output
@@ -103,7 +103,7 @@ class TestListCommand:
 
     def test_host_filter(self, cfg, seeded_journal):
         runner = CliRunner()
-        with patch.object(cli_mod, "_load_or_die", return_value=cfg):
+        with patch.object(cli_mod._common, "_load_or_die", return_value=cfg):
             # Real repo has mirrors targeting gitlab + github; filter excludes neither
             result = runner.invoke(cli_mod.app, ["list", "--host", "gitlab"])
         assert result.exit_code == 0, result.output
@@ -111,21 +111,21 @@ class TestListCommand:
 
     def test_host_filter_no_match(self, cfg, seeded_journal):
         runner = CliRunner()
-        with patch.object(cli_mod, "_load_or_die", return_value=cfg):
+        with patch.object(cli_mod._common, "_load_or_die", return_value=cfg):
             result = runner.invoke(cli_mod.app, ["list", "--host", "nowhere"])
         assert result.exit_code == 0, result.output
         assert "No tracked repos" in result.output
 
     def test_name_filter_glob(self, cfg, seeded_journal):
         runner = CliRunner()
-        with patch.object(cli_mod, "_load_or_die", return_value=cfg):
+        with patch.object(cli_mod._common, "_load_or_die", return_value=cfg):
             result = runner.invoke(cli_mod.app, ["list", "--filter", "probe*"])
         assert result.exit_code == 0, result.output
         assert "probe" in result.output
 
     def test_json_output(self, cfg, seeded_journal):
         runner = CliRunner()
-        with patch.object(cli_mod, "_load_or_die", return_value=cfg):
+        with patch.object(cli_mod._common, "_load_or_die", return_value=cfg):
             result = runner.invoke(cli_mod.app, ["list", "--json"])
         assert result.exit_code == 0, result.output
         import json as json_mod
@@ -156,7 +156,7 @@ class TestListCommand:
             ),
         ]
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.cli.secrets_mod.get_token", return_value="primary-tok"),
             patch("hydra.providers.gitlab.GitLabProvider.list_mirrors", return_value=live),
         ):
@@ -195,7 +195,7 @@ class TestScanCommand:
             )
         ]
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
             patch(
                 "hydra.providers.gitlab.GitLabProvider.list_projects_with_mirrors",
@@ -222,7 +222,7 @@ class TestScanCommand:
             )
         ]
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
             patch(
                 "hydra.providers.gitlab.GitLabProvider.list_projects_with_mirrors",
@@ -251,7 +251,7 @@ class TestScanCommand:
             ),
         ]
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
             patch(
                 "hydra.providers.gitlab.GitLabProvider.list_projects_with_mirrors",
@@ -278,7 +278,7 @@ class TestScanCommand:
             ),
         ]
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
             patch(
                 "hydra.providers.gitlab.GitLabProvider.list_projects_with_mirrors",
@@ -305,7 +305,7 @@ class TestScanCommand:
             ),
         ]
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
             patch(
                 "hydra.providers.gitlab.GitLabProvider.list_projects_with_mirrors",
@@ -334,7 +334,7 @@ class TestScanCommand:
             ),
         ]
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
             patch(
                 "hydra.providers.gitlab.GitLabProvider.list_projects_with_mirrors",
@@ -366,7 +366,7 @@ class TestScanCommand:
             ),
         ]
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
             patch(
                 "hydra.providers.gitlab.GitLabProvider.list_projects_with_mirrors",
@@ -394,7 +394,7 @@ class TestScanCommand:
             forks=["gitlab", "github"],
             defaults=Defaults(private=True, group=""),
         )
-        with patch.object(cli_mod, "_load_or_die", return_value=cfg_no_scope):
+        with patch.object(cli_mod._common, "_load_or_die", return_value=cfg_no_scope):
             result = runner.invoke(cli_mod.app, ["scan"])
         assert result.exit_code == 1, result.output
         assert "--namespace" in result.output
@@ -425,7 +425,7 @@ class TestScanCommand:
             ),
         ]
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
             patch(
                 "hydra.providers.gitlab.GitLabProvider.list_projects_with_mirrors",
@@ -460,7 +460,7 @@ class TestScanCommand:
             ),
         ]
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
             patch(
                 "hydra.providers.gitlab.GitLabProvider.list_projects_with_mirrors",
@@ -490,7 +490,7 @@ class TestScanCommand:
             ),
         ]
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
             patch(
                 "hydra.providers.gitlab.GitLabProvider.list_projects_with_mirrors",
@@ -516,7 +516,7 @@ class TestScanCommand:
             ),
         ]
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
             patch(
                 "hydra.providers.gitlab.GitLabProvider.list_projects_with_mirrors",
@@ -543,7 +543,7 @@ class TestScanCommand:
             ),
         ]
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
             patch(
                 "hydra.providers.gitlab.GitLabProvider.list_projects_with_mirrors",
@@ -570,7 +570,7 @@ class TestScanCommand:
             defaults=Defaults(private=True, group=""),
         )
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg_no_scope),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg_no_scope),
             patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
             patch(
                 "hydra.providers.gitlab.GitLabProvider.list_projects_with_mirrors",
@@ -585,7 +585,7 @@ class TestScanCommand:
     def test_missing_repo_reported(self, cfg, seeded_journal):
         runner = CliRunner()
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
             patch(
                 "hydra.providers.gitlab.GitLabProvider.list_projects_with_mirrors",
@@ -604,7 +604,7 @@ class TestScanCommand:
 class TestRotateToken:
     def test_unknown_host(self, cfg):
         runner = CliRunner()
-        with patch.object(cli_mod, "_load_or_die", return_value=cfg):
+        with patch.object(cli_mod._common, "_load_or_die", return_value=cfg):
             result = runner.invoke(cli_mod.app, ["rotate-token", "ghost", "--token", "new"])
         assert result.exit_code == 1
         assert "Unknown host" in result.output
@@ -613,7 +613,7 @@ class TestRotateToken:
         """Rotating the primary's PAT should NOT touch any mirror."""
         runner = CliRunner()
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.gitlab.verify_token") as verify,
             patch("hydra.cli.preflight_mod.check_tokens", return_value=_clean_preflight()),
             patch("hydra.secrets.set_token") as set_token,
@@ -629,7 +629,7 @@ class TestRotateToken:
     def test_fork_host_replaces_all_matching_mirrors(self, cfg, seeded_journal):
         runner = CliRunner()
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.github.verify_token") as verify,
             patch("hydra.cli.preflight_mod.check_tokens", return_value=_clean_preflight()),
             patch("hydra.secrets.set_token") as set_token,
@@ -657,7 +657,7 @@ class TestRotateToken:
     def test_dry_run_makes_no_changes(self, cfg, seeded_journal):
         runner = CliRunner()
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.github.verify_token") as verify,
             patch("hydra.cli.preflight_mod.check_tokens", return_value=_clean_preflight()),
             patch("hydra.secrets.set_token") as set_token,
@@ -681,7 +681,7 @@ class TestRotateToken:
 
         runner = CliRunner()
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.github.verify_token"),
             patch("hydra.cli.preflight_mod.check_tokens", return_value=_clean_preflight()),
             patch("hydra.secrets.set_token"),
@@ -702,7 +702,7 @@ class TestRotateToken:
     def test_skip_verify_skips_probe(self, cfg, seeded_journal):
         runner = CliRunner()
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.github.verify_token") as verify,
             patch("hydra.cli.preflight_mod.check_tokens") as preflight,
             patch("hydra.secrets.set_token"),
@@ -736,7 +736,7 @@ class TestRotateToken:
         )
         runner = CliRunner()
         with (
-            patch.object(cli_mod, "_load_or_die", return_value=cfg),
+            patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
             patch("hydra.github.verify_token"),
             patch("hydra.cli.preflight_mod.check_tokens", return_value=bad),
             patch("hydra.secrets.set_token") as set_token,

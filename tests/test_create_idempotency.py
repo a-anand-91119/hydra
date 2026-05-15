@@ -56,8 +56,8 @@ def patches(cfg):
     """
     with (
         patch("hydra.cli.secrets_mod.get_token", side_effect=lambda hid, **_: f"tok-{hid}"),
-        patch.object(cli_mod, "_load_or_die", lambda *a, **k: cfg),
-        patch("hydra.cli._preflight_or_die") as preflight,
+        patch.object(cli_mod._common, "_load_or_die", lambda *a, **k: cfg),
+        patch("hydra.cli._common._preflight_or_die") as preflight,
         patch("hydra.gitlab.get_or_create_group_path") as gl_groups,
         patch("hydra.gitlab.create_repo") as gl_create,
         patch("hydra.mirrors.add_mirror") as mi_add,

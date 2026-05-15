@@ -379,6 +379,11 @@ def _pick_forks(
 def run_wizard(
     *, config_path: Optional[Path] = None, console: Optional[Console] = None
 ) -> WizardResult:
+    """Top-level orchestration: TTY check → bootstrap → 4 phases → review → save.
+
+    Each phase is its own function so the prompts (the only side effect) are
+    isolated from the assembly of ``Config`` / ``WizardResult``.
+    """
     if not sys.stdin.isatty():
         raise WizardCancelled(
             "configure must be run from a terminal (no TTY detected). "
@@ -409,10 +414,25 @@ def run_wizard(
     forks = _pick_forks(hosts, primary=primary, default=existing.forks, console=console)
 
     _section(console, 3, total_steps, "Defaults")
+    defaults = _collect_defaults(existing.defaults)
+    cfg = Config(hosts=hosts, primary=primary, forks=forks, defaults=defaults)
+
+    _section(console, 4, total_steps, "API tokens")
+    store, tokens = _collect_tokens(hosts, console)
+
+    if not _confirm_save(cfg, tokens, store, console):
+        raise WizardCancelled("aborted by user")
+
+    saved_path = save_config(cfg, config_path)
+    return WizardResult(config=cfg, tokens=tokens, store=store, config_path=saved_path)
+
+
+def _collect_defaults(existing: Defaults) -> Defaults:
+    """Phase 3 — prompt for the default group path and visibility."""
     default_group = _ask(
         questionary.text(
             "Default group path (on the primary host):",
-            default=existing.defaults.group,
+            default=existing.group,
             instruction="(blank = none. Override per-invocation with --group.)",
             style=QSTYLE,
         )
@@ -421,19 +441,19 @@ def run_wizard(
         questionary.select(
             "Default repository visibility:",
             choices=[Choice("Private", value=True), Choice("Public", value=False)],
-            default=existing.defaults.private,
+            default=existing.private,
             style=QSTYLE,
         )
     )
+    return Defaults(private=bool(visibility), group=default_group.strip())
 
-    cfg = Config(
-        hosts=hosts,
-        primary=primary,
-        forks=forks,
-        defaults=Defaults(private=bool(visibility), group=default_group.strip()),
-    )
 
-    _section(console, 4, total_steps, "API tokens")
+def _collect_tokens(
+    hosts: List[HostSpec], console: Console
+) -> tuple:
+    """Phase 4 — pick a token-storage strategy and (when not skipped) collect
+    a token per host. Returns ``(store, tokens)``. Empty input skips a host.
+    """
     store = _ask(
         questionary.select(
             "How would you like to store API tokens?",
@@ -453,17 +473,15 @@ def run_wizard(
             token = _ask(questionary.password(f"{host.id} token:", style=QSTYLE))
             if token.strip():
                 tokens[host.id] = token.strip()
+    return store, tokens
 
+
+def _confirm_save(cfg: Config, tokens: Dict[str, str], store: str, console: Console) -> bool:
+    """Render the review summary and ask the final save y/N. Pure I/O wrapper."""
     _review_rule(console)
     console.print(_summary_table(cfg, tokens, store))
     console.print()
-
-    confirmed = _ask(questionary.confirm("Save this configuration?", default=True, style=QSTYLE))
-    if not confirmed:
-        raise WizardCancelled("aborted by user")
-
-    saved_path = save_config(cfg, config_path)
-    return WizardResult(config=cfg, tokens=tokens, store=store, config_path=saved_path)
+    return _ask(questionary.confirm("Save this configuration?", default=True, style=QSTYLE))
 
 
 def _summary_table(cfg: Config, tokens: Dict[str, str], store: str) -> Table:
@@ -499,15 +517,33 @@ def _summary_table(cfg: Config, tokens: Dict[str, str], store: str) -> Table:
 
 
 def run_create_wizard(*, cfg: Config, console: Console) -> CreateOptions:
+    """Top-level orchestration: TTY check → intro → collect → review → confirm.
+
+    The phases are extracted into ``_collect_create_inputs`` and
+    ``_confirm_create`` so each can be exercised in isolation (the prompts
+    are the only side effect — pure validation is unit-testable elsewhere).
+    """
     if not sys.stdin.isatty():
         raise WizardCancelled("create wizard needs a terminal — pass a repo name to use flag mode.")
 
     _intro(console, "create")
+    opts = _collect_create_inputs(cfg, console)
+    decision = _confirm_create(cfg, opts, console)
 
+    if decision == "cancel":
+        raise WizardCancelled("aborted at review")
+    opts.dry_run = decision == "dry"
+    return opts
+
+
+def _collect_create_inputs(cfg: Config, console: Console) -> CreateOptions:
+    """Run the three input phases (Repository → Placement → Mirrors) and
+    return a populated ``CreateOptions``. ``dry_run`` stays False here;
+    ``run_create_wizard`` sets it from the review decision.
+    """
     total_steps = 3
 
     _section(console, 1, total_steps, "Repository")
-
     name = _ask(
         questionary.text(
             "Repository name:",
@@ -516,9 +552,7 @@ def run_create_wizard(*, cfg: Config, console: Console) -> CreateOptions:
             style=QSTYLE,
         )
     ).strip()
-
     description = _ask(questionary.text("Description (optional):", style=QSTYLE)).strip()
-
     visibility = _ask(
         questionary.select(
             "Visibility:",
@@ -529,7 +563,6 @@ def run_create_wizard(*, cfg: Config, console: Console) -> CreateOptions:
     )
 
     _section(console, 2, total_steps, "Placement")
-
     group = _ask(
         questionary.text(
             f"Group path on the primary host ({cfg.primary}):",
@@ -540,7 +573,6 @@ def run_create_wizard(*, cfg: Config, console: Console) -> CreateOptions:
     ).strip()
 
     _section(console, 3, total_steps, "Mirrors")
-
     fork_ids = ", ".join(cfg.forks)
     mirror = _ask(
         questionary.confirm(
@@ -550,7 +582,7 @@ def run_create_wizard(*, cfg: Config, console: Console) -> CreateOptions:
         )
     )
 
-    opts = CreateOptions(
+    return CreateOptions(
         name=name,
         description=description,
         group=group,
@@ -558,11 +590,17 @@ def run_create_wizard(*, cfg: Config, console: Console) -> CreateOptions:
         mirror=mirror,
     )
 
+
+def _confirm_create(cfg: Config, opts: CreateOptions, console: Console) -> str:
+    """Render the review summary and ask the final go/dry/cancel question.
+
+    Returns one of ``"go"``, ``"dry"``, or ``"cancel"`` — the caller
+    translates that into ``opts.dry_run`` and the cancellation branch.
+    """
     _review_rule(console)
     console.print(_create_summary(cfg, opts))
     console.print()
-
-    decision = _ask(
+    return _ask(
         questionary.select(
             "Proceed?",
             choices=[
@@ -573,12 +611,6 @@ def run_create_wizard(*, cfg: Config, console: Console) -> CreateOptions:
             style=QSTYLE,
         )
     )
-
-    if decision == "cancel":
-        raise WizardCancelled("aborted at review")
-
-    opts.dry_run = decision == "dry"
-    return opts
 
 
 def _create_summary(cfg: Config, opts: CreateOptions) -> Table:

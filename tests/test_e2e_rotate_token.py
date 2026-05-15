@@ -117,3 +117,83 @@ class TestRotateFork:
         # We just confirm set_token was called → reached the keyring step.
         if result.exit_code == 0:
             set_tok.assert_called_once()
+
+
+class TestRotateMidFailure:
+    """Catastrophic mid-rotation failure must surface a per-mirror outcome
+    table so the user knows which mirrors landed and which are stranded.
+    """
+
+    @pytest.fixture
+    def seeded_three_mirrors(self):
+        """Three repos, each with one fork_gh mirror — enough to demonstrate
+        updated / journal_failed / not_attempted in one run."""
+        with journal_mod.journal() as j:
+            for i, name in enumerate(("alpha", "beta", "gamma"), start=1):
+                repo_id = j.record_repo(
+                    name=name,
+                    primary_host_id="primary",
+                    primary_repo_id=10 + i,
+                    primary_repo_url=f"https://primary.example/team/{name}",
+                )
+                j.record_mirror(
+                    repo_id=repo_id,
+                    target_host_id="fork_gh",
+                    target_repo_url=f"https://github.com/team/{name}.git",
+                    push_mirror_id=500 + i,
+                    target_repo_id=None,
+                )
+
+    def test_journal_write_failure_renders_outcome_table_and_exits_1(
+        self, config_path, seeded_three_mirrors, runner, requests_mock
+    ):
+        body, headers = github_user()
+        requests_mock.get("https://api.github.com/user", json=body, headers=headers)
+        # All three API DELETE+POST pairs succeed (numbered remote_mirror ids).
+        for pid, new_id in ((11, 9001), (12, 9002), (13, 9003)):
+            requests_mock.delete(
+                f"https://primary.example/api/v4/projects/{pid}/remote_mirrors/{500 + pid - 10}",
+                status_code=204,
+            )
+            requests_mock.post(
+                f"https://primary.example/api/v4/projects/{pid}/remote_mirrors",
+                json={"id": new_id, "url": f"https://github.com/team/x{pid}.git"},
+            )
+
+        # Make the SECOND journal write blow up. First call succeeds; second
+        # raises; third never runs.
+        original = journal_mod.Journal.update_mirror_push_id
+        call_state = {"n": 0}
+
+        def flaky(self, *args, **kwargs):
+            call_state["n"] += 1
+            if call_state["n"] == 2:
+                raise RuntimeError("simulated SQLite failure")
+            return original(self, *args, **kwargs)
+
+        with (
+            patch("hydra.secrets.set_token"),
+            patch.object(journal_mod.Journal, "update_mirror_push_id", flaky),
+        ):
+            result = runner.invoke(
+                cli_mod.app, ["rotate-token", "fork_gh", "--token", "ghp_new"]
+            )
+
+        assert result.exit_code == 1, result.output
+        out = result.output
+        # First mirror: inline ✓ printed during the loop.
+        assert "alpha" in out
+        # Second mirror: journal_failed — appears in the per-mirror outcome table.
+        assert "beta" in out
+        assert "journal write failed" in out
+        # Third mirror: not_attempted — must show in the table so the user
+        # knows it's stranded.
+        assert "gamma" in out
+        assert "not attempted" in out
+        # The journal must reflect the partial reality: alpha got the new push id;
+        # beta and gamma still carry the old ones.
+        with journal_mod.journal() as j:
+            mirrors_by_name = {r.name: r.mirrors[0] for r in j.list_repos()}
+        assert mirrors_by_name["alpha"].push_mirror_id == 9001
+        assert mirrors_by_name["beta"].push_mirror_id == 502
+        assert mirrors_by_name["gamma"].push_mirror_id == 503

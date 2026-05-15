@@ -14,11 +14,13 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional, Tuple
 
 from hydra.config import HostSpec
 from hydra.errors import HydraAPIError
 from hydra.secrets import TokenScopes
+
+Severity = Literal["error", "warning", "ok"]
 
 # Minimum machine-readable scopes hydra needs per provider kind. Tokens may
 # carry more (and usually do); the missing-scope warning only fires when one
@@ -100,6 +102,57 @@ def missing_scopes(required: set, have: List[str]) -> set:
     return missing
 
 
+def _probe_one_host(host: HostSpec, token: str) -> Tuple[Severity, PreflightFinding]:
+    """Probe one host's token and classify the outcome.
+
+    Returns ``(severity, finding)`` so the caller can route it to the right
+    bucket without re-parsing the message string.
+    """
+    try:
+        info = inspect_for_host(host, token)
+    except HydraAPIError as e:
+        return "error", PreflightFinding(
+            host_id=host.id,
+            message=f"{host.id} — token rejected ({e.status_code or '?'}): {e.message}",
+            hint=e.hint,
+        )
+    if info is None:
+        return "warning", PreflightFinding(
+            host_id=host.id,
+            message=(
+                f"{host.id} — no token-introspection probe for kind "
+                f"{host.kind!r}; permissions not verified"
+            ),
+        )
+    if not info.scopes_known:
+        return "warning", PreflightFinding(
+            host_id=host.id,
+            message=(
+                f"{host.id} — token valid (scopes not exposed by host; "
+                f"fine-grained PAT or older GitLab)"
+            ),
+        )
+    missing = missing_scopes(required_scopes_for(host), info.scopes)
+    if missing:
+        return "error", PreflightFinding(
+            host_id=host.id,
+            message=(
+                f"{host.id} — token valid but missing scope(s): "
+                f"{', '.join(sorted(missing))} (have: {', '.join(info.scopes)})"
+            ),
+            hint=(
+                f"Mint a new {host.kind} token with the required scopes "
+                f"and re-run `hydra configure`."
+            ),
+        )
+    line = f"scopes: {', '.join(info.scopes)}"
+    if info.expires_at:
+        line += f"; expires {info.expires_at}"
+    return "ok", PreflightFinding(
+        host_id=host.id, message=f"{host.id} — token valid ({line})"
+    )
+
+
 def check_tokens(hosts: List[HostSpec], tokens: Dict[str, str]) -> PreflightReport:
     """Validate every host's token in parallel.
 
@@ -109,7 +162,7 @@ def check_tokens(hosts: List[HostSpec], tokens: Dict[str, str]) -> PreflightRepo
     - Token valid but missing a required scope → an ``errors`` entry.
     - Token valid but the host doesn't expose scopes (fine-grained PATs,
       older GitLab) → a ``warnings`` entry.
-    - Token valid with all required scopes → no entry.
+    - Token valid with all required scopes → an ``oks`` entry.
 
     Hosts whose kind has no inspection probe yield a warning so callers
     know preflight was skipped for them.
@@ -119,75 +172,14 @@ def check_tokens(hosts: List[HostSpec], tokens: Dict[str, str]) -> PreflightRepo
     if not targets:
         return report
 
-    def probe(host: HostSpec) -> List[PreflightFinding]:
-        token = tokens[host.id]
-        try:
-            info = inspect_for_host(host, token)
-        except HydraAPIError as e:
-            return [
-                PreflightFinding(
-                    host_id=host.id,
-                    message=f"{host.id} — token rejected ({e.status_code or '?'}): {e.message}",
-                    hint=e.hint,
-                )
-            ]
-        if info is None:
-            return [
-                PreflightFinding(
-                    host_id=host.id,
-                    message=(
-                        f"{host.id} — no token-introspection probe for kind "
-                        f"{host.kind!r}; permissions not verified"
-                    ),
-                )
-            ]
-        if not info.scopes_known:
-            return [
-                PreflightFinding(
-                    host_id=host.id,
-                    message=(
-                        f"{host.id} — token valid (scopes not exposed by host; "
-                        f"fine-grained PAT or older GitLab)"
-                    ),
-                )
-            ]
-        missing = missing_scopes(required_scopes_for(host), info.scopes)
-        if missing:
-            return [
-                PreflightFinding(
-                    host_id=host.id,
-                    message=(
-                        f"{host.id} — token valid but missing scope(s): "
-                        f"{', '.join(sorted(missing))} (have: {', '.join(info.scopes)})"
-                    ),
-                    hint=(
-                        f"Mint a new {host.kind} token with the required scopes "
-                        f"and re-run `hydra configure`."
-                    ),
-                )
-            ]
-        line = f"scopes: {', '.join(info.scopes)}"
-        if info.expires_at:
-            line += f"; expires {info.expires_at}"
-        return [
-            PreflightFinding(
-                host_id=host.id,
-                message=f"{host.id} — token valid ({line})",
-            )
-        ]
+    bucket = {"error": report.errors, "warning": report.warnings, "ok": report.oks}
 
     workers = max(1, min(len(targets), 8))
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = [ex.submit(probe, host) for host in targets]
+        futures = [ex.submit(_probe_one_host, host, tokens[host.id]) for host in targets]
         for fut in as_completed(futures):
-            for finding in fut.result():
-                msg = finding.message
-                if "token rejected" in msg or "missing scope" in msg:
-                    report.errors.append(finding)
-                elif "token valid (scopes: " in msg:
-                    report.oks.append(finding)
-                else:
-                    report.warnings.append(finding)
+            severity, finding = fut.result()
+            bucket[severity].append(finding)
 
     # Stable order for deterministic output.
     report.errors.sort(key=lambda f: f.host_id)
