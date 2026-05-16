@@ -1,74 +1,108 @@
 from __future__ import annotations
 
+import json as json_mod
 from pathlib import Path
 from typing import Optional
 
 import typer
 from rich.console import Console
 
-from hydra import providers as providers_mod
+from hydra import journal as journal_mod
 from hydra.cli import _common, app
-from hydra.cli._render import _render_api_error
-from hydra.errors import HydraAPIError
-from hydra.hostspec_utils import match_fork
-from hydra.mirrors import scrub_credentials
+from hydra.cli._common import UNHEALTHY_STATUSES
+from hydra.cli._render import _render_status
 
 
 @app.command(no_args_is_help=True)
 def status(
-    name: str = typer.Argument(..., help="Repo name (with optional group/path)"),
-    group: Optional[str] = typer.Option(
-        None, "--group", "-g", help="Group path on the primary host"
+    name: str = typer.Argument(..., help="Repo name (as tracked in the journal)."),
+    refresh: bool = typer.Option(
+        False,
+        "--refresh",
+        help="Re-query the primary host and update the journal before showing.",
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
+    max_workers: int = typer.Option(
+        8,
+        "--max-workers",
+        envvar="HYDRA_SCAN_WORKERS",
+        min=1,
+        max=32,
+        help="Concurrent HTTP workers for --refresh (default 8).",
     ),
     config_path: Optional[Path] = typer.Option(None, "--config"),
 ) -> None:
-    """Show mirror status for a repo on the primary host."""
+    """Show one repo's mirror health from the journal (offline by default).
+
+    Per-mirror last status and last error are shown inline. Pass --refresh to
+    re-query the primary host and update the journal first. Exits non-zero if
+    any mirror is unhealthy, so it doubles as a CI health gate.
+    """
     console = Console()
     cfg = _common._load_or_die(config_path, console)
-    primary_spec = cfg.primary_host()
-    primary_caps = providers_mod.capabilities_for(primary_spec.kind)
-    if not primary_caps.supports_status_lookup:
+
+    try:
+        with journal_mod.journal() as j:
+            if refresh:
+                _common._refresh_status(
+                    cfg=cfg,
+                    journal=j,
+                    console=console,
+                    max_workers=max_workers,
+                    only_repo=name,
+                )
+            matches = [r for r in j.list_repos() if r.name == name]
+    except Exception as e:  # noqa: BLE001
+        console.print(f"[red]Could not open journal: {e}[/red]")
+        raise typer.Exit(code=1) from None
+
+    if not matches:
         console.print(
-            f"[red]Status lookup is not supported for primary kind {primary_spec.kind!r}.[/red]"
+            f"[yellow]Not tracked:[/yellow] {name}. "
+            f"Run [bold]hydra scan[/bold] to adopt it, or [bold]hydra create[/bold]."
         )
         raise typer.Exit(code=1)
 
-    primary = providers_mod.get(primary_spec.kind)(primary_spec)
-    primary_token = _common._resolve_token_or_die(
-        primary_spec.id, allow_prompt=True, console=console
-    )
+    if len(matches) > 1:
+        console.print(
+            f"[yellow]Ambiguous:[/yellow] {len(matches)} repos named {name!r} in the journal:"
+        )
+        for r in matches:
+            console.print(f"  • {r.primary_host_id}: {r.primary_repo_url}")
+        console.print("[dim]Disambiguation by group is not yet supported.[/dim]")
+        raise typer.Exit(code=1)
 
-    effective_group = group if group is not None else cfg.defaults.group
-    repo_path = f"{effective_group}/{name}" if effective_group else name
+    repo = matches[0]
 
-    try:
-        repo = primary.find_project(token=primary_token, repo_path=repo_path)
-        if repo is None:
-            console.print(f"[red]Project not found:[/red] {repo_path}")
-            raise typer.Exit(code=1)
+    if output_json:
+        typer.echo(json_mod.dumps(_common._repos_to_json([repo])[0], indent=2))
+        # JSON consumers inspect last_status themselves; still set the exit code.
+        raise typer.Exit(code=_exit_code(repo))
 
-        mirror_list = primary.list_mirrors(token=primary_token, primary_repo=repo)
-    except HydraAPIError as e:
-        _render_api_error(console, e, created=[])
-        raise typer.Exit(code=1) from None
+    console.print(f"[bold]{repo.name}[/bold]  [dim](primary: {repo.primary_host_id})[/dim]")
+    if not repo.mirrors:
+        console.print("  [dim](no mirrors tracked)[/dim]")
+        raise typer.Exit(code=0)
 
-    if not mirror_list:
-        console.print(f"No mirrors configured for {repo_path}.")
-        return
-
-    console.print(f"Mirrors for [bold]{repo_path}[/bold] (project {repo.project_id}):")
-    fork_specs = cfg.fork_hosts()
-    for m in mirror_list:
-        match = match_fork(m.url, fork_specs)
-        label = f"[bold]{match.id}[/bold]" if match else "[dim](unconfigured)[/dim]"
-        flag = "[green]enabled [/green]" if m.enabled else "[yellow]disabled[/yellow]"
-        # Always strip credentials before printing — GitLab echoes them back.
-        safe_url = scrub_credentials(m.url)
-        line = f"  {label} [{flag}] {safe_url}"
-        if m.last_update_status:
-            line += f" — {m.last_update_status}"
-        if m.last_update_at:
-            line += f" @ {m.last_update_at}"
-        console.print(line)
+    for m in repo.mirrors:
+        when = m.last_update_at or "[dim]never[/dim]"
+        console.print(
+            f"  {m.target_host_id}: {_render_status(m.last_status)}  [dim]{when}[/dim]"
+        )
         if m.last_error:
-            console.print(f"    [red]error: {m.last_error}[/red]")
+            console.print(f"      [red]error: {m.last_error}[/red]")
+
+    if not refresh:
+        console.print(
+            "[dim](journal cache · --refresh to re-query the primary)[/dim]"
+        )
+
+    raise typer.Exit(code=_exit_code(repo))
+
+
+def _exit_code(repo: journal_mod.JournalRepo) -> int:
+    """0 if every mirror is healthy, 1 if any is in an unhealthy state."""
+    unhealthy = any(
+        (m.last_status or "").lower() in UNHEALTHY_STATUSES for m in repo.mirrors
+    )
+    return 1 if unhealthy else 0

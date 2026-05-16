@@ -58,6 +58,9 @@ After installing, the `hydra` command is on your `PATH`.
 # 1. One-time setup — pick hosts, defaults, and store tokens
 hydra configure
 
+# (optional) shell tab-completion for bash/zsh/fish
+hydra --install-completion
+
 # 2. See what *would* happen, without making any API calls
 hydra create my-first-repo --dry-run
 
@@ -161,10 +164,11 @@ before any provider call. `--yes` skips the prompt.
 ## Inspecting mirrors
 
 ```sh
-hydra status my-repo --group platform/services
+hydra status my-repo            # offline — reads the journal cache
+hydra status my-repo --refresh  # re-query the primary, then show
 ```
 
-Shows the enabled state, last-sync status, and any errors per mirror — useful when you push something and it doesn't appear on GitLab.com or GitHub.
+Shows per-mirror last status and last error inline for one repo, straight from the journal — no network unless you pass `--refresh`. Exits non-zero if any mirror is unhealthy, so it doubles as a CI health gate. When a mirror is broken, `hydra repair` re-establishes it without a full `scan`.
 
 ---
 
@@ -174,9 +178,10 @@ Shows the enabled state, last-sync status, and any errors per mirror — useful 
 | ------- | ----------- |
 | `hydra create [name]` | Create the repo across all three hosts. Without `name`, runs the wizard. Renders a plan + prompts before applying (skip with `--yes`). |
 | `hydra configure`     | Onboarding wizard — config + tokens. |
-| `hydra status <name>` | Show the self-hosted project's mirror state. |
+| `hydra status <name>` | Per-mirror health for one repo from the journal (offline). `--refresh` re-queries the primary first. Exits non-zero if any mirror is unhealthy. |
 | `hydra list`          | List journaled repos and last-known mirror status. `--refresh` re-queries the primary (uses `--max-workers`, default 8). |
 | `hydra scan`          | Diff the journal against the primary. `--apply` adopts unknowns and resyncs drifted ids (renders a plan + prompts; skip with `--yes`). `--interactive` filters the plan per-repo first. `--max-workers <N>` controls concurrent HTTP calls (default 8, env `HYDRA_SCAN_WORKERS`). |
+| `hydra repair [name]` | Re-establish mirrors the journal marks unhealthy (broken/missing/failed/error): re-adds gone mirrors, replaces failing ones. Renders a plan + prompts (skip with `--yes`); supports `--dry-run` and `--host <id>`. |
 | `hydra rotate-token`  | Rotate a host PAT in the keyring and rewrite every push-mirror that embeds the old token. |
 | `hydra doctor`        | Diagnose configuration, tokens, and topology. `--fix` runs safe migrations. |
 | `hydra config-path`   | Print the resolved config-file path. |

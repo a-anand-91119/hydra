@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -12,7 +11,7 @@ from hydra import journal as journal_mod
 from hydra import providers as providers_mod
 from hydra import secrets as secrets_mod
 from hydra.cli import _common, app
-from hydra.cli._render import _render_api_error
+from hydra.cli._render import MirrorOpOutcome, _render_api_error, render_mirror_outcomes
 from hydra.errors import HydraAPIError, MirrorReplaceError
 from hydra.mirrors import scrub_credentials
 from hydra.providers.base import MirrorSource, RepoRef
@@ -114,8 +113,8 @@ def rotate_token(
         primary_spec.id, allow_prompt=True, console=console
     )
 
-    outcomes: List[_MirrorRotationOutcome] = [
-        _MirrorRotationOutcome(repo_name=repo.name, state="not_attempted") for repo, _ in pairs
+    outcomes: List[MirrorOpOutcome] = [
+        MirrorOpOutcome(repo_name=repo.name, state="not_attempted") for repo, _ in pairs
     ]
 
     try:
@@ -132,7 +131,7 @@ def rotate_token(
                         target_label=host_id,
                     )
                 except MirrorReplaceError as e:
-                    outcomes[idx] = _MirrorRotationOutcome(
+                    outcomes[idx] = MirrorOpOutcome(
                         repo_name=repo.name, state="destroyed", message=e.message, hint=e.hint
                     )
                     # Best-effort journal write: mirror is already gone on the host,
@@ -152,7 +151,7 @@ def rotate_token(
                             console.print(f"    [dim]{line}[/dim]")
                     continue
                 except HydraAPIError as e:
-                    outcomes[idx] = _MirrorRotationOutcome(
+                    outcomes[idx] = MirrorOpOutcome(
                         repo_name=repo.name, state="api_failed", message=e.message
                     )
                     console.print(f"[red]✗[/red] {repo.name}: {e.message}")
@@ -166,79 +165,18 @@ def rotate_token(
                     if new_push_id is not None:
                         j.update_mirror_push_id(mirror_db_id=m.id, new_push_mirror_id=new_push_id)
                 except Exception as e:  # noqa: BLE001
-                    outcomes[idx] = _MirrorRotationOutcome(
+                    outcomes[idx] = MirrorOpOutcome(
                         repo_name=repo.name, state="journal_failed", message=str(e)
                     )
                     raise
-                outcomes[idx] = _MirrorRotationOutcome(repo_name=repo.name, state="updated")
+                outcomes[idx] = MirrorOpOutcome(repo_name=repo.name, state="ok")
                 console.print(f"[green]✓[/green] {repo.name}")
     except Exception as e:  # noqa: BLE001 — catastrophic mid-rotation failure
-        _render_rotation_outcomes(console, outcomes)
+        render_mirror_outcomes(console, outcomes, ok_verb="updated")
         console.print()
         console.print(f"[red]Journal write failed mid-rotation: {e}[/red]")
         raise typer.Exit(code=1) from None
 
-    failed = _render_rotation_outcomes(console, outcomes)
+    failed = render_mirror_outcomes(console, outcomes, ok_verb="updated")
     if failed:
         raise typer.Exit(code=1)
-
-
-@dataclass
-class _MirrorRotationOutcome:
-    repo_name: str
-    state: Literal["updated", "api_failed", "destroyed", "journal_failed", "not_attempted"]
-    message: str = ""
-    hint: Optional[str] = None
-
-
-def _render_rotation_outcomes(
-    console: Console, outcomes: List[_MirrorRotationOutcome]
-) -> int:
-    """Render a final per-mirror summary table.
-
-    Returns the count of non-success outcomes (api_failed + destroyed +
-    journal_failed + not_attempted) so the caller can decide the exit code.
-    """
-    updated = sum(1 for o in outcomes if o.state == "updated")
-    api_failed = sum(1 for o in outcomes if o.state == "api_failed")
-    destroyed = sum(1 for o in outcomes if o.state == "destroyed")
-    journal_failed = sum(1 for o in outcomes if o.state == "journal_failed")
-    not_attempted = sum(1 for o in outcomes if o.state == "not_attempted")
-    failed = api_failed + destroyed + journal_failed + not_attempted
-
-    # Render the per-mirror table only when there is information the inline
-    # progress lines didn't already convey (journal_failed is set silently
-    # before re-raise; not_attempted entries were never visited).
-    if journal_failed or not_attempted:
-        console.print()
-        console.print("[bold]Rotation outcomes:[/bold]")
-        for o in outcomes:
-            if o.state == "updated":
-                console.print(f"  [green]✓[/green] {o.repo_name}")
-            elif o.state == "api_failed":
-                console.print(f"  [red]✗[/red] {o.repo_name}: {o.message}")
-            elif o.state == "destroyed":
-                console.print(
-                    f"  [bold red]✗[/bold red] {o.repo_name}: DELETED — {o.message}"
-                )
-            elif o.state == "journal_failed":
-                console.print(
-                    f"  [yellow]![/yellow] {o.repo_name}: "
-                    f"mirror updated on host but journal write failed — {o.message}"
-                )
-            elif o.state == "not_attempted":
-                console.print(f"  [dim]?[/dim] {o.repo_name}: not attempted")
-
-    console.print()
-    summary = f"{updated} updated"
-    non_summary_failed = api_failed + destroyed + journal_failed
-    if non_summary_failed:
-        summary += f", [red]{non_summary_failed} failed[/red]"
-    if destroyed:
-        summary += (
-            f" ([bold red]{destroyed} mirror(s) DELETED with no replacement[/bold red])"
-        )
-    if not_attempted:
-        summary += f", [yellow]{not_attempted} not attempted[/yellow]"
-    console.print(summary + ".")
-    return failed

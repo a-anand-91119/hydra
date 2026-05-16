@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
 
 from hydra import cli as cli_mod
+from hydra import journal as journal_mod
 from hydra.config import Config, Defaults, HostSpec
 from hydra.hostspec_utils import match_fork
-from hydra.providers.base import MirrorInfo, RepoRef
 
 
 @pytest.fixture
@@ -25,120 +26,104 @@ def cfg():
     )
 
 
-def test_status_reconciles_mirror_urls_with_fork_ids(cfg):
-    runner = CliRunner()
-    mirrors = [
-        MirrorInfo(
-            id=1,
-            url="https://oauth2:xxx@gitlab.com/managed/foo/probe.git",
-            enabled=True,
-            last_update_status="success",
-            last_update_at="2025-01-01T00:00:00Z",
-            last_error=None,
-        ),
-        MirrorInfo(
-            id=2,
-            url="https://oauth2:xxx@github.com/me/probe.git",
-            enabled=True,
-            last_update_status="success",
-            last_update_at=None,
-            last_error=None,
-        ),
-        MirrorInfo(
-            id=3,
-            url="https://example.org/random.git",
-            enabled=False,
-            last_update_status=None,
-            last_update_at=None,
-            last_error=None,
-        ),
-    ]
-
-    with (
-        patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
-        patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
-        patch(
-            "hydra.providers.gitlab.GitLabProvider.find_project",
-            return_value=RepoRef(http_url="", project_id=42),
-        ),
-        patch("hydra.providers.gitlab.GitLabProvider.list_mirrors", return_value=mirrors),
-    ):
-        result = runner.invoke(cli_mod.app, ["status", "probe"])
-
-    assert result.exit_code == 0, result.output
-    # api.github.com (config) ↔ github.com (mirror URL) is handled by the
-    # github-kind special case in spec_mirror_hostname; the third mirror
-    # (example.org) has no matching fork.
-    assert "gitlab" in result.output  # the fork id label
-    assert "github" in result.output  # the github fork now matched
-    assert "(unconfigured)" in result.output  # third mirror has no matching fork
+def _seed(name="alpha", *, mirrors):
+    """Seed one journal repo with the given (host_id, status, error) mirrors."""
+    with journal_mod.journal() as j:
+        repo_id = j.record_repo(
+            name=name,
+            primary_host_id="self_hosted_gitlab",
+            primary_repo_id=10,
+            primary_repo_url=f"https://gitlab.example.com/team/{name}",
+        )
+        for host_id, status, err in mirrors:
+            mid = j.record_mirror(
+                repo_id=repo_id,
+                target_host_id=host_id,
+                target_repo_url=f"https://{host_id}.example/team/{name}.git",
+                push_mirror_id=500 + len(host_id),
+                target_repo_id=None,
+            )
+            if status is not None or err is not None:
+                j.update_mirror_status(
+                    mirror_db_id=mid,
+                    last_status=status,
+                    last_error=err,
+                    last_update_at=None,
+                )
 
 
-def test_status_scrubs_credentials_from_mirror_url(cfg):
-    """Regression: GitLab API echoes the URL we sent — including the token —
-    in /remote_mirrors responses. status must NOT print the raw token.
-    """
-    runner = CliRunner()
-    leaky = [
-        MirrorInfo(
-            id=99,
-            url="https://oauth2:glpat-SECRET-TOKEN-DO-NOT-LEAK@gitlab.com/foo/bar.git",
-            enabled=True,
-            last_update_status="success",
-            last_update_at=None,
-            last_error=None,
-        ),
-    ]
-    with (
-        patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
-        patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
-        patch(
-            "hydra.providers.gitlab.GitLabProvider.find_project",
-            return_value=RepoRef(http_url="", project_id=42),
-        ),
-        patch("hydra.providers.gitlab.GitLabProvider.list_mirrors", return_value=leaky),
-    ):
-        result = runner.invoke(cli_mod.app, ["status", "probe"])
+class TestStatusJournalBacked:
+    def test_inline_error_and_unhealthy_exit_1(self, cfg):
+        _seed(mirrors=[("gitlab", "success", None), ("github", "broken", "replace failed: gone")])
+        runner = CliRunner()
+        with patch.object(cli_mod._common, "_load_or_die", return_value=cfg):
+            result = runner.invoke(cli_mod.app, ["status", "alpha"])
 
-    assert result.exit_code == 0, result.output
-    assert "glpat-SECRET-TOKEN-DO-NOT-LEAK" not in result.output
-    assert "oauth2:" not in result.output
-    # Hostname is still shown so users can identify the fork.
-    assert "gitlab.com" in result.output
+        assert result.exit_code == 1, result.output
+        out = result.output
+        assert "alpha" in out
+        assert "gitlab" in out and "success" in out
+        assert "github" in out and "broken" in out
+        assert "error: replace failed: gone" in out
+        assert "journal cache" in out  # footer present (no --refresh)
 
+    def test_all_healthy_exits_0(self, cfg):
+        _seed(mirrors=[("gitlab", "success", None), ("github", "success", None)])
+        runner = CliRunner()
+        with patch.object(cli_mod._common, "_load_or_die", return_value=cfg):
+            result = runner.invoke(cli_mod.app, ["status", "alpha"])
+        assert result.exit_code == 0, result.output
 
-def test_status_blocks_when_primary_lacks_status_capability(cfg):
-    runner = CliRunner()
-    # Swap in a fake provider kind without status support.
-    from hydra import providers as providers_mod
-    from hydra.providers.base import Capabilities
+    def test_never_refreshed_is_stale_not_unhealthy(self, cfg):
+        # last_status None → "stale", exit 0 (not a failure).
+        _seed(mirrors=[("gitlab", None, None)])
+        runner = CliRunner()
+        with patch.object(cli_mod._common, "_load_or_die", return_value=cfg):
+            result = runner.invoke(cli_mod.app, ["status", "alpha"])
+        assert result.exit_code == 0, result.output
+        assert "stale" in result.output
 
-    fake_caps = Capabilities(
-        supports_mirror_source=True,
-        supports_group_paths=False,
-        supports_status_lookup=False,
-        inbound_mirror_username="oauth2",
-    )
-    with (
-        patch.object(providers_mod, "capabilities_for", return_value=fake_caps),
-        patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
-    ):
-        result = runner.invoke(cli_mod.app, ["status", "probe"])
-    assert result.exit_code == 1
-    assert "not supported" in result.output.lower()
+    def test_not_tracked_exits_1(self, cfg):
+        runner = CliRunner()
+        with patch.object(cli_mod._common, "_load_or_die", return_value=cfg):
+            result = runner.invoke(cli_mod.app, ["status", "ghost"])
+        assert result.exit_code == 1
+        assert "not tracked" in result.output.lower()
 
+    def test_ambiguous_name_exits_1(self, cfg):
+        # Same name under two different primary (host, repo_id) keys → two rows.
+        with journal_mod.journal() as j:
+            j.record_repo(
+                name="dup",
+                primary_host_id="self_hosted_gitlab",
+                primary_repo_id=1,
+                primary_repo_url="https://gitlab.example.com/a/dup",
+            )
+            j.record_repo(
+                name="dup",
+                primary_host_id="gitlab",
+                primary_repo_id=2,
+                primary_repo_url="https://gitlab.com/b/dup",
+            )
+        runner = CliRunner()
+        with patch.object(cli_mod._common, "_load_or_die", return_value=cfg):
+            result = runner.invoke(cli_mod.app, ["status", "dup"])
+        assert result.exit_code == 1, result.output
+        assert "ambiguous" in result.output.lower()
+        assert "https://gitlab.example.com/a/dup" in result.output
+        assert "https://gitlab.com/b/dup" in result.output
 
-def test_status_unknown_repo_exits_1(cfg):
-    runner = CliRunner()
-    with (
-        patch.object(cli_mod._common, "_load_or_die", return_value=cfg),
-        patch("hydra.cli.secrets_mod.get_token", return_value="tok"),
-        patch("hydra.providers.gitlab.GitLabProvider.find_project", return_value=None),
-    ):
-        result = runner.invoke(cli_mod.app, ["status", "missing"])
-
-    assert result.exit_code == 1
-    assert "not found" in result.output.lower()
+    def test_json_shape_matches_list(self, cfg):
+        _seed(mirrors=[("github", "broken", "boom")])
+        runner = CliRunner()
+        with patch.object(cli_mod._common, "_load_or_die", return_value=cfg):
+            result = runner.invoke(cli_mod.app, ["status", "alpha", "--json"])
+        assert result.exit_code == 1, result.output  # broken mirror → nonzero
+        payload = json.loads(result.output)
+        assert payload["name"] == "alpha"
+        assert payload["mirrors"][0]["target_host_id"] == "github"
+        assert payload["mirrors"][0]["last_status"] == "broken"
+        assert payload["mirrors"][0]["last_error"] == "boom"
 
 
 class TestMatchFork:

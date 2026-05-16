@@ -19,7 +19,7 @@ from hydra import providers as providers_mod
 providers_mod.bootstrap()
 
 app = typer.Typer(
-    add_completion=False,
+    add_completion=True,
     no_args_is_help=True,
     help="Hydra — provision a repo across one primary and N forks.",
 )
@@ -61,6 +61,7 @@ from hydra.cli import (  # noqa: E402, F401
     create,
     doctor,
     paths,
+    repair,
     rotate,
     scan,
     status,
@@ -71,6 +72,7 @@ from hydra.cli._common import (  # noqa: E402, F401
     _load_or_die,
     _parse_host_options,
     _preflight_or_die,
+    _refresh_status,
     _resolve_token_or_die,
     _resolve_tokens_or_die,
     _verify_token,
@@ -79,4 +81,3 @@ from hydra.cli.create import (  # noqa: E402, F401
     _execute_create,
     _journal_records_primary,
 )
-from hydra.cli.list import _refresh_status  # noqa: E402, F401
