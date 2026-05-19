@@ -202,8 +202,7 @@ def _refresh_status(
     repos = [
         r
         for r in journal.list_repos()
-        if r.primary_host_id == primary_spec.id
-        and (only_repo is None or r.name == only_repo)
+        if r.primary_host_id == primary_spec.id and (only_repo is None or r.name == only_repo)
     ]
     if not repos:
         return

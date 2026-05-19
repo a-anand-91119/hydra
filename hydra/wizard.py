@@ -448,9 +448,7 @@ def _collect_defaults(existing: Defaults) -> Defaults:
     return Defaults(private=bool(visibility), group=default_group.strip())
 
 
-def _collect_tokens(
-    hosts: List[HostSpec], console: Console
-) -> tuple:
+def _collect_tokens(hosts: List[HostSpec], console: Console) -> tuple:
     """Phase 4 — pick a token-storage strategy and (when not skipped) collect
     a token per host. Returns ``(store, tokens)``. Empty input skips a host.
     """

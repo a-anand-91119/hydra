@@ -29,12 +29,8 @@ def repair(
     host: Optional[str] = typer.Option(
         None, "--host", help="Only repair mirrors targeting this host id."
     ),
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Show the repair plan; make no changes."
-    ),
-    yes: bool = typer.Option(
-        False, "--yes", "-y", help="Skip the confirmation prompt."
-    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show the repair plan; make no changes."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
     config_path: Optional[Path] = typer.Option(None, "--config"),
 ) -> None:
     """Re-establish push-mirrors the journal marks unhealthy.
@@ -118,9 +114,7 @@ def repair(
     # Probe failures are non-success outcomes that must be summarised even
     # when nothing is actionable.
     probe_outcomes = [
-        MirrorOpOutcome(
-            repo_name=f"{r.name} → {m.target_host_id}", state="api_failed", message=msg
-        )
+        MirrorOpOutcome(repo_name=f"{r.name} → {m.target_host_id}", state="api_failed", message=msg)
         for r, m, msg in probe_failed
     ]
 
@@ -130,9 +124,7 @@ def repair(
         render_mirror_outcomes(console, probe_outcomes, ok_verb="repaired")
         raise typer.Exit(code=1)
 
-    if not yes and not typer.confirm(
-        f"Repair {len(candidates)} mirror(s)?", default=False
-    ):
+    if not yes and not typer.confirm(f"Repair {len(candidates)} mirror(s)?", default=False):
         console.print("[dim]No changes made.[/dim]")
         raise typer.Exit(code=0)
 
@@ -204,9 +196,7 @@ def repair(
                 new_push_id = safe_int(payload.get("id") if payload else None)
                 try:
                     if new_push_id is not None:
-                        j.update_mirror_push_id(
-                            mirror_db_id=m.id, new_push_mirror_id=new_push_id
-                        )
+                        j.update_mirror_push_id(mirror_db_id=m.id, new_push_mirror_id=new_push_id)
                     # Clear cached status: freshly (re)provisioned, real state
                     # comes from the next `status --refresh` / `scan`.
                     j.update_mirror_status(

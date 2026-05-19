@@ -130,10 +130,7 @@ class TestMatchFork:
     def test_exact_host_matches(self):
         fork = HostSpec(id="cloud", kind="gitlab", url="https://gitlab.com")
         other = HostSpec(id="gh", kind="github", url="https://api.github.com")
-        assert (
-            match_fork("https://oauth2:tok@gitlab.com/foo/bar.git", [fork, other]).id
-            == "cloud"
-        )
+        assert match_fork("https://oauth2:tok@gitlab.com/foo/bar.git", [fork, other]).id == "cloud"
 
     def test_different_host_does_not_match(self):
         fork = HostSpec(id="cloud", kind="gitlab", url="https://gitlab.com")
@@ -144,15 +141,9 @@ class TestMatchFork:
         # Substring match would be unsafe — ensure exact equality.
         fork = HostSpec(id="cloud", kind="gitlab", url="https://gitlab.com")
         assert (
-            match_fork(
-                "https://oauth2:tok@evilgitlab.com.attacker.example/foo.git", [fork]
-            )
-            is None
+            match_fork("https://oauth2:tok@evilgitlab.com.attacker.example/foo.git", [fork]) is None
         )
-        assert (
-            match_fork("https://oauth2:tok@gitlab.com.evil.example/foo.git", [fork])
-            is None
-        )
+        assert match_fork("https://oauth2:tok@gitlab.com.evil.example/foo.git", [fork]) is None
 
     def test_case_insensitive_host(self):
         fork = HostSpec(id="cloud", kind="gitlab", url="https://GitLab.com")
@@ -161,26 +152,19 @@ class TestMatchFork:
     def test_port_independent(self):
         # Same host, different ports — current behavior matches by hostname only.
         fork = HostSpec(id="cloud", kind="gitlab", url="https://gitlab.com:443")
-        assert (
-            match_fork("https://oauth2:tok@gitlab.com:8443/foo.git", [fork]).id == "cloud"
-        )
+        assert match_fork("https://oauth2:tok@gitlab.com:8443/foo.git", [fork]).id == "cloud"
 
     def test_github_api_url_matches_git_url(self):
         """api.github.com (config) ↔ github.com (mirror push URL) — special case
         for the github kind so scan / status can recognise the fork."""
         fork = HostSpec(id="gh", kind="github", url="https://api.github.com")
-        assert (
-            match_fork("https://x-access-token:tok@github.com/me/probe.git", [fork]).id
-            == "gh"
-        )
+        assert match_fork("https://x-access-token:tok@github.com/me/probe.git", [fork]).id == "gh"
 
     def test_github_enterprise_uses_configured_hostname(self):
         """Self-hosted GHE: api URL and git URL share a hostname, no special case."""
         fork = HostSpec(id="ghe", kind="github", url="https://github.acme.internal")
         assert (
-            match_fork(
-                "https://x-access-token:tok@github.acme.internal/team/r.git", [fork]
-            ).id
+            match_fork("https://x-access-token:tok@github.acme.internal/team/r.git", [fork]).id
             == "ghe"
         )
         # And api.github.com is not magically accepted for an enterprise host:

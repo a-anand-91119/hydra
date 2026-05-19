@@ -116,9 +116,7 @@ def render_mirror_outcomes(
             elif o.state == "api_failed":
                 console.print(f"  [red]✗[/red] {o.repo_name}: {o.message}")
             elif o.state == "destroyed":
-                console.print(
-                    f"  [bold red]✗[/bold red] {o.repo_name}: DELETED — {o.message}"
-                )
+                console.print(f"  [bold red]✗[/bold red] {o.repo_name}: DELETED — {o.message}")
             elif o.state == "journal_failed":
                 console.print(
                     f"  [yellow]![/yellow] {o.repo_name}: "
@@ -135,9 +133,7 @@ def render_mirror_outcomes(
     if non_summary_failed:
         summary += f", [red]{non_summary_failed} failed[/red]"
     if destroyed:
-        summary += (
-            f" ([bold red]{destroyed} mirror(s) DELETED with no replacement[/bold red])"
-        )
+        summary += f" ([bold red]{destroyed} mirror(s) DELETED with no replacement[/bold red])"
     if not_attempted:
         summary += f", [yellow]{not_attempted} not attempted[/yellow]"
     if skipped:

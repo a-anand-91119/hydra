@@ -148,9 +148,7 @@ def _probe_one_host(host: HostSpec, token: str) -> Tuple[Severity, PreflightFind
     line = f"scopes: {', '.join(info.scopes)}"
     if info.expires_at:
         line += f"; expires {info.expires_at}"
-    return "ok", PreflightFinding(
-        host_id=host.id, message=f"{host.id} — token valid ({line})"
-    )
+    return "ok", PreflightFinding(host_id=host.id, message=f"{host.id} — token valid ({line})")
 
 
 def check_tokens(hosts: List[HostSpec], tokens: Dict[str, str]) -> PreflightReport:

@@ -94,5 +94,3 @@ def _filter_repos(
     if name_pattern:
         out = [r for r in out if fnmatch.fnmatchcase(r.name, name_pattern)]
     return out
-
-

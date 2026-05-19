@@ -58,9 +58,7 @@ class TestRepairAddPath:
     def test_broken_mirror_gone_is_re_added(self, config_path, runner, requests_mock):
         _seed("alpha", "fork_gl", push_mirror_id=501, status="broken", error="was destroyed")
         # Mirror is GONE on the primary → empty live list → action "add".
-        requests_mock.get(
-            "https://primary.example/api/v4/projects/10/remote_mirrors", json=[]
-        )
+        requests_mock.get("https://primary.example/api/v4/projects/10/remote_mirrors", json=[])
         requests_mock.post(
             "https://primary.example/api/v4/projects/10/remote_mirrors",
             json={"id": 9001, "url": "https://gitlab.com/team/alpha.git"},
@@ -104,9 +102,7 @@ class TestRepairReplacePath:
 class TestRepairPlanAndFilters:
     def test_dry_run_probes_but_does_not_mutate(self, config_path, runner, requests_mock):
         _seed("alpha", "fork_gl", push_mirror_id=501, status="broken")
-        requests_mock.get(
-            "https://primary.example/api/v4/projects/10/remote_mirrors", json=[]
-        )
+        requests_mock.get("https://primary.example/api/v4/projects/10/remote_mirrors", json=[])
         result = runner.invoke(cli_mod.app, ["repair", "--dry-run"])
         assert result.exit_code == 0, result.output
         assert "Repair plan" in result.output
@@ -123,9 +119,7 @@ class TestRepairPlanAndFilters:
 
     def test_decline_prompt_makes_no_changes(self, config_path, runner, requests_mock):
         _seed("alpha", "fork_gl", push_mirror_id=501, status="broken")
-        requests_mock.get(
-            "https://primary.example/api/v4/projects/10/remote_mirrors", json=[]
-        )
+        requests_mock.get("https://primary.example/api/v4/projects/10/remote_mirrors", json=[])
         result = runner.invoke(cli_mod.app, ["repair"], input="n\n")
         assert result.exit_code == 0, result.output
         assert "No changes made" in result.output
@@ -134,16 +128,12 @@ class TestRepairPlanAndFilters:
     def test_host_filter_scopes_to_one_target(self, config_path, runner, requests_mock):
         _seed("alpha", "fork_gl", push_mirror_id=501, status="broken", primary_repo_id=10)
         _seed("alpha", "fork_gh", push_mirror_id=601, status="broken", primary_repo_id=10)
-        requests_mock.get(
-            "https://primary.example/api/v4/projects/10/remote_mirrors", json=[]
-        )
+        requests_mock.get("https://primary.example/api/v4/projects/10/remote_mirrors", json=[])
         requests_mock.post(
             "https://primary.example/api/v4/projects/10/remote_mirrors",
             json={"id": 7000, "url": "x"},
         )
-        result = runner.invoke(
-            cli_mod.app, ["repair", "--host", "fork_gh", "--yes"]
-        )
+        result = runner.invoke(cli_mod.app, ["repair", "--host", "fork_gh", "--yes"])
         assert result.exit_code == 0, result.output
         # Only the fork_gh mirror was repaired; fork_gl stays broken.
         with journal_mod.journal() as j:
@@ -153,9 +143,7 @@ class TestRepairPlanAndFilters:
 
 
 class TestRepairDestroyed:
-    def test_replace_delete_ok_post_fails_is_destroyed(
-        self, config_path, runner, requests_mock
-    ):
+    def test_replace_delete_ok_post_fails_is_destroyed(self, config_path, runner, requests_mock):
         _seed("gamma", "fork_gl", push_mirror_id=503, status="failed")
         requests_mock.get(
             "https://primary.example/api/v4/projects/10/remote_mirrors",
@@ -184,9 +172,7 @@ class TestRepairProbeFailure:
     silently guessed as 'add' (which would POST a duplicate mirror).
     """
 
-    def test_probe_failure_routes_all_mirrors_no_mutation(
-        self, config_path, runner, requests_mock
-    ):
+    def test_probe_failure_routes_all_mirrors_no_mutation(self, config_path, runner, requests_mock):
         # Two unhealthy mirrors on the SAME project (id=10), different targets.
         _seed("alpha", "fork_gl", push_mirror_id=501, status="broken", primary_repo_id=10)
         _seed("alpha", "fork_gh", push_mirror_id=601, status="failed", primary_repo_id=10)
@@ -216,13 +202,9 @@ class TestRepairProbeFailure:
 
 
 class TestRepairJournalFailure:
-    def test_journal_write_failure_mid_repair_exits_1(
-        self, config_path, runner, requests_mock
-    ):
+    def test_journal_write_failure_mid_repair_exits_1(self, config_path, runner, requests_mock):
         _seed("alpha", "fork_gl", push_mirror_id=501, status="broken")
-        requests_mock.get(
-            "https://primary.example/api/v4/projects/10/remote_mirrors", json=[]
-        )
+        requests_mock.get("https://primary.example/api/v4/projects/10/remote_mirrors", json=[])
         requests_mock.post(
             "https://primary.example/api/v4/projects/10/remote_mirrors",
             json={"id": 9001, "url": "x"},

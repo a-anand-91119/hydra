@@ -65,9 +65,7 @@ class TestStatusJournalBacked:
 
 
 class TestStatusRefresh:
-    def test_refresh_queries_primary_and_updates_journal(
-        self, config_path, runner, requests_mock
-    ):
+    def test_refresh_queries_primary_and_updates_journal(self, config_path, runner, requests_mock):
         _seed(push_mirror_id=501, status=None)  # stale, never refreshed
         # The live mirror reports a failing sync.
         requests_mock.get(
@@ -100,8 +98,16 @@ class TestStatusRefresh:
         # beta (project 20) the unmocked call would raise.
         requests_mock.get(
             "https://primary.example/api/v4/projects/10/remote_mirrors",
-            json=[{"id": 501, "url": "x", "enabled": True, "last_update_status": "success",
-                   "last_update_at": None, "last_error": None}],
+            json=[
+                {
+                    "id": 501,
+                    "url": "x",
+                    "enabled": True,
+                    "last_update_status": "success",
+                    "last_update_at": None,
+                    "last_error": None,
+                }
+            ],
         )
         result = runner.invoke(cli_mod.app, ["status", "alpha", "--refresh"])
         assert result.exit_code == 0, result.output

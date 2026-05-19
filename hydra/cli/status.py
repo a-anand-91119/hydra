@@ -86,23 +86,17 @@ def status(
 
     for m in repo.mirrors:
         when = m.last_update_at or "[dim]never[/dim]"
-        console.print(
-            f"  {m.target_host_id}: {_render_status(m.last_status)}  [dim]{when}[/dim]"
-        )
+        console.print(f"  {m.target_host_id}: {_render_status(m.last_status)}  [dim]{when}[/dim]")
         if m.last_error:
             console.print(f"      [red]error: {m.last_error}[/red]")
 
     if not refresh:
-        console.print(
-            "[dim](journal cache · --refresh to re-query the primary)[/dim]"
-        )
+        console.print("[dim](journal cache · --refresh to re-query the primary)[/dim]")
 
     raise typer.Exit(code=_exit_code(repo))
 
 
 def _exit_code(repo: journal_mod.JournalRepo) -> int:
     """0 if every mirror is healthy, 1 if any is in an unhealthy state."""
-    unhealthy = any(
-        (m.last_status or "").lower() in UNHEALTHY_STATUSES for m in repo.mirrors
-    )
+    unhealthy = any((m.last_status or "").lower() in UNHEALTHY_STATUSES for m in repo.mirrors)
     return 1 if unhealthy else 0

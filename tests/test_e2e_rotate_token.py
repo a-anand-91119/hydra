@@ -175,9 +175,7 @@ class TestRotateMidFailure:
             patch("hydra.secrets.set_token"),
             patch.object(journal_mod.Journal, "update_mirror_push_id", flaky),
         ):
-            result = runner.invoke(
-                cli_mod.app, ["rotate-token", "fork_gh", "--token", "ghp_new"]
-            )
+            result = runner.invoke(cli_mod.app, ["rotate-token", "fork_gh", "--token", "ghp_new"])
 
         assert result.exit_code == 1, result.output
         out = result.output
