@@ -121,9 +121,9 @@ Releases go to PyPI as `hydra-repo-syncer` via the OIDC → GCP Workload Identit
 
 To cut a release:
 
-1. Bump the version in **two places** (these are currently out of sync intentionally — pick one and keep them aligned):
-   - `pyproject.toml` → `[project] version = "X.Y.Z"`
-   - `hydra/__init__.py` → `__version__ = "X.Y.Z"`
+1. Bump the version in `pyproject.toml` → `[project] version = "X.Y.Z"`.
+   `hydra.__version__` is read from installed package metadata, so it follows
+   the packaged version automatically.
 2. Commit: `chore: bump version to X.Y.Z`.
 3. Tag: `git tag vX.Y.Z`.
 4. `git push && git push --tags`.
