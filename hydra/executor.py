@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from rich.console import Console
 
 from hydra import journal as journal_mod
+from hydra import mirrors as mirrors_api
 from hydra import providers as providers_mod
 from hydra.config import Config
 from hydra.errors import HydraAPIError
@@ -28,12 +29,26 @@ from hydra.utils import safe_int
 
 
 @dataclass
+class CreatedResource:
+    """One resource created during a plan apply, carrying enough info to undo it."""
+
+    label: str
+    url: str
+    host_id: str
+    kind: str  # "repo", "group", or "mirror"
+    project_id: Optional[int] = None
+    group_path: Optional[str] = None
+    push_mirror_id: Optional[int] = None
+
+
+@dataclass
 class ApplyResult:
     applied: int = 0
     failed: Optional[Action] = None
     error: Optional[Exception] = None
     created: List[Tuple[str, str]] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    rollback_items: List[CreatedResource] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -122,7 +137,17 @@ def _h_ensure_namespace(ctx: _Ctx, action: Action) -> None:
     ns = prov.ensure_namespace(group_path=action.payload.get("group"), token=token)
     ctx.symbols[f"ns:{action.host_id}"] = ns
     for path in ns.created_paths:
-        ctx.result.created.append((f"{action.host_id} group", f"{spec.url}/{path}"))
+        url = f"{spec.url}/{path}"
+        ctx.result.created.append((f"{action.host_id} group", url))
+        ctx.result.rollback_items.append(
+            CreatedResource(
+                label=f"{action.host_id} group",
+                url=url,
+                host_id=action.host_id,
+                kind="group",
+                group_path=path,
+            )
+        )
     if ctx.verbose and ns.namespace_id is not None:
         ctx.console.print(f"[dim]{action.host_id} group id: {ns.namespace_id}[/dim]")
 
@@ -143,6 +168,15 @@ def _h_create_repo(ctx: _Ctx, action: Action) -> None:
     )
     ctx.symbols[action.payload["ref"]] = repo
     ctx.result.created.append((f"{action.host_id} repo", repo.http_url))
+    ctx.result.rollback_items.append(
+        CreatedResource(
+            label=f"{action.host_id} repo",
+            url=repo.http_url,
+            host_id=action.host_id,
+            kind="repo",
+            project_id=repo.project_id,
+        )
+    )
     ctx.console.print(f"[green]✓[/green] {action.host_id}: {repo.http_url}")
 
 
@@ -198,6 +232,18 @@ def _h_add_outbound_mirror(ctx: _Ctx, action: Action) -> None:
     )
     ctx.symbols[f"mirror:{target_host_id}"] = payload or {}
     ctx.result.created.append((f"{action.host_id} mirror → {target_host_id}", target_repo.http_url))
+    push_mirror_id = safe_int(payload.get("id") if payload else None)
+    if push_mirror_id is not None and primary_repo.project_id is not None:
+        ctx.result.rollback_items.append(
+            CreatedResource(
+                label=f"{action.host_id} mirror → {target_host_id}",
+                url=target_repo.http_url,
+                host_id=action.host_id,
+                kind="mirror",
+                project_id=primary_repo.project_id,
+                push_mirror_id=push_mirror_id,
+            )
+        )
     ctx.console.print(f"[green]✓[/green] mirror configured: {target_host_id}")
 
 
@@ -264,4 +310,66 @@ def _h_journal_update_push_id(ctx: _Ctx, action: Action) -> None:
     )
 
 
-__all__ = ["ApplyResult", "apply_plan"]
+def rollback_created(
+    rollback_items: List[CreatedResource],
+    *,
+    cfg: Config,
+    tokens: Dict[str, str],
+    console: Console,
+) -> None:
+    """Delete resources created during a failed apply, in reverse order.
+
+    Errors during individual rollbacks are reported but don't abort the rest.
+    """
+    if not rollback_items:
+        return
+
+    providers_map: Dict[str, Any] = {h.id: providers_mod.get(h.kind)(h) for h in cfg.hosts}
+
+    for item in reversed(rollback_items):
+        prov = providers_map.get(item.host_id)
+        if prov is None:
+            console.print(
+                f"[yellow]  ⚠ no provider for {item.host_id}, skipping {item.label}[/yellow]"
+            )
+            continue
+        try:
+            if item.kind == "mirror":
+                if item.project_id is not None and item.push_mirror_id is not None:
+                    mirrors_api.delete_mirror(
+                        host_id=item.host_id,
+                        base_url=cfg.host(item.host_id).url,
+                        token=tokens[item.host_id],
+                        project_id=item.project_id,
+                        mirror_id=item.push_mirror_id,
+                    )
+                    console.print(f"[dim]  rolled back mirror → {item.url}[/dim]")
+            elif item.kind == "repo":
+                delete_repo = getattr(prov, "delete_repo", None)
+                if callable(delete_repo) and item.project_id is not None:
+                    delete_repo(token=tokens[item.host_id], project_id=item.project_id)
+                    console.print(f"[dim]  rolled back {item.host_id} repo[/dim]")
+                    try:
+                        with journal_mod.journal() as j:
+                            j.delete_repo_by_project_id(
+                                primary_host_id=item.host_id,
+                                primary_repo_id=item.project_id,
+                            )
+                    except Exception:  # noqa: BLE001
+                        pass
+                elif callable(delete_repo):
+                    delete_repo(token=tokens[item.host_id], repo_url=item.url)
+                    console.print(f"[dim]  rolled back {item.host_id} repo[/dim]")
+            elif item.kind == "group":
+                if item.group_path is not None and hasattr(prov, "delete_namespace"):
+                    prov.delete_namespace(token=tokens[item.host_id], group_path=item.group_path)
+                    console.print(
+                        f"[dim]  rolled back {item.host_id} group '{item.group_path}'[/dim]"
+                    )
+        except HydraAPIError as e:
+            console.print(f"[yellow]  ⚠ rollback failed for {item.label}: {e.message}[/yellow]")
+        except Exception as e:  # noqa: BLE001
+            console.print(f"[yellow]  ⚠ rollback failed for {item.label}: {e}[/yellow]")
+
+
+__all__ = ["ApplyResult", "CreatedResource", "apply_plan", "rollback_created"]

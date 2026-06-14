@@ -347,3 +347,37 @@ def _fetch_page(
     resp = http.get(endpoint, headers=headers, params=page_params)
     raise_for_response(resp, host=host, action="listing projects", host_url=endpoint)
     return list(resp.json())
+
+
+def delete_project(*, host: str, base_url: str, token: str, project_id: int) -> None:
+    """Delete a GitLab project. GitLab 12+ returns 202 Accepted (async deletion)."""
+    headers = {"PRIVATE-TOKEN": token}
+    response = http.delete(f"{base_url}/api/v4/projects/{project_id}", headers=headers)
+    if response.status_code in (200, 202, 204):
+        return
+    if response.status_code == 400 and _body_mentions(response, "already been marked for deletion"):
+        return
+    raise_for_response(
+        response, host=host, action=f"deleting project {project_id}", host_url=base_url
+    )
+
+
+def delete_group(*, host: str, base_url: str, token: str, group_path: str) -> None:
+    """Delete a GitLab group by path. GitLab 12+ returns 202 Accepted (async deletion)."""
+    encoded = quote(group_path, safe="")
+    headers = {"PRIVATE-TOKEN": token}
+    response = http.delete(f"{base_url}/api/v4/groups/{encoded}", headers=headers)
+    if response.status_code in (200, 202, 204):
+        return
+    raise_for_response(
+        response, host=host, action=f"deleting group '{group_path}'", host_url=base_url
+    )
+
+
+def _body_mentions(response, needle: str) -> bool:
+    needle = needle.lower()
+    try:
+        payload = response.json()
+    except ValueError:
+        return needle in (response.text or "").lower()
+    return needle in str(payload).lower()

@@ -79,6 +79,23 @@ def find_repo(*, base_url: str, token: str, owner: str, name: str) -> Optional[s
     raise AssertionError("unreachable")
 
 
+def delete_repo(*, base_url: str, token: str, owner: str, name: str) -> None:
+    """Delete a GitHub repository by owner/name."""
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    response = http.delete(f"{base_url}/repos/{owner}/{name}", headers=headers)
+    if response.status_code in (200, 202, 204):
+        return
+    raise_for_response(
+        response,
+        host="github",
+        action=f"deleting repo '{owner}/{name}'",
+        host_url=base_url,
+    )
+
+
 def inspect_token(*, base_url: str, token: str):
     """Return scopes for a GitHub token.
 

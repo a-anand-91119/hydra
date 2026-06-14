@@ -59,6 +59,7 @@ from hydra import secrets as secrets_mod  # noqa: E402, F401
 from hydra.cli import (  # noqa: E402, F401
     configure,
     create,
+    destroy,
     doctor,
     paths,
     repair,

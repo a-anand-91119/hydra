@@ -31,10 +31,7 @@ def _render_api_error(console: Console, err: HydraAPIError, created: List[Tuple[
         for label, url in created:
             console.print(f"  • [bold]{label}[/bold]: {url}")
         console.print()
-        console.print(
-            "  [dim]These resources exist now. Delete them manually before retrying, "
-            "or use a different repo name.[/dim]"
-        )
+        console.print("  [dim]These resources exist now.[/dim]")
     console.print()
 
 

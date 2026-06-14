@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Optional
+from urllib.parse import urlparse
 
 from hydra import github as github_api
 from hydra.providers.base import (
@@ -85,6 +86,26 @@ class GitHubProvider:
             return None
         return RepoRef(http_url=clone_url, project_id=None, namespace_path=owner)
 
+    def delete_repo(
+        self,
+        *,
+        token: str,
+        project_id: Optional[int] = None,
+        repo_url: Optional[str] = None,
+        name: Optional[str] = None,
+    ) -> None:
+        del project_id
+        owner = _owner_from_url(repo_url) or self._owner(token)
+        repo_name = _repo_name_from_url(repo_url) or name
+        if not owner or not repo_name:
+            raise ValueError("GitHub delete requires an owner and repo name")
+        github_api.delete_repo(
+            base_url=self.spec.url,
+            token=token,
+            owner=owner,
+            name=repo_name,
+        )
+
 
 def _factory(spec: HostSpec) -> GitHubProvider:
     return GitHubProvider(spec)
@@ -94,3 +115,30 @@ def install() -> None:
     from hydra.providers import register
 
     register(KIND, _factory, CAPABILITIES)
+
+
+def _owner_from_url(url: Optional[str]) -> Optional[str]:
+    parsed = _parse_repo_url(url)
+    return parsed[0] if parsed else None
+
+
+def _repo_name_from_url(url: Optional[str]) -> Optional[str]:
+    parsed = _parse_repo_url(url)
+    return parsed[1] if parsed else None
+
+
+def _parse_repo_url(url: Optional[str]) -> Optional[tuple[str, str]]:
+    if not url:
+        return None
+    try:
+        parts = [p for p in urlparse(url).path.strip("/").split("/") if p]
+    except Exception:
+        return None
+    if len(parts) < 2:
+        return None
+    name = parts[1]
+    if name.endswith(".git"):
+        name = name[:-4]
+    if not parts[0] or not name:
+        return None
+    return parts[0], name

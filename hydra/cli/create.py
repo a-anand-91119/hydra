@@ -176,6 +176,21 @@ def _execute_create(
                 _render_api_error(console, err, result.created)
             else:
                 console.print(f"[red]{err}[/red]")
+            if result.rollback_items:
+                try:
+                    confirmed = typer.confirm("  Roll back the created resources?", default=False)
+                except (OSError, EOFError, KeyboardInterrupt):
+                    confirmed = False
+                if confirmed:
+                    console.print()
+                    console.print("[yellow]Rolling back…[/yellow]")
+                    executor.rollback_created(
+                        result.rollback_items,
+                        cfg=cfg,
+                        tokens=tokens,
+                        console=console,
+                    )
+                    console.print("[dim]Rollback complete.[/dim]")
             raise typer.Exit(code=1) from None
     finally:
         _render_retry_footer(console)

@@ -219,6 +219,14 @@ class Journal:
         )
         self._conn.commit()
 
+    def delete_repo_by_project_id(self, *, primary_host_id: str, primary_repo_id: int) -> None:
+        """Remove a repo record and its mirrors (via CASCADE) by project id."""
+        self._conn.execute(
+            "DELETE FROM repos WHERE primary_host_id = ? AND primary_repo_id = ?",
+            (primary_host_id, primary_repo_id),
+        )
+        self._conn.commit()
+
     # ── Reads ────────────────────────────────────────────────────────────
 
     def list_repos(self) -> List[JournalRepo]:

@@ -47,6 +47,7 @@ class FakeProvider:
         self.spec = spec
         self.capabilities = _CAPS
         self.calls: List[str] = []
+        self.deleted: List[dict] = []
         self._next_pid = 1000
 
     def ensure_namespace(self, *, group_path, token):
@@ -67,6 +68,12 @@ class FakeProvider:
     ):
         self.calls.append(f"mirror:{target_label}")
         return {"id": 5000 + len(self.calls)}
+
+    def delete_repo(self, **kwargs):
+        self.deleted.append(kwargs)
+
+    def delete_namespace(self, **kwargs):
+        self.deleted.append(kwargs)
 
     # Unused by these tests — kept so isinstance(Provider, MirrorSource) works
     def find_repo(self, **kwargs): ...  # pragma: no cover
@@ -189,3 +196,26 @@ class TestEmptyPlan:
         )
         assert result.ok
         assert result.applied == 0
+
+
+class TestRollbackCreated:
+    def test_deletes_repo_without_project_id_by_url(self, patched_providers):
+        cfg = _cfg()
+        executor.rollback_created(
+            [
+                executor.CreatedResource(
+                    label="cloud repo",
+                    url="https://github.com/acme/probe.git",
+                    host_id="cloud",
+                    kind="repo",
+                    project_id=None,
+                )
+            ],
+            cfg=cfg,
+            tokens={"primary": "tp", "cloud": "tc"},
+            console=Console(),
+        )
+
+        assert patched_providers["cloud"].deleted == [
+            {"token": "tc", "repo_url": "https://github.com/acme/probe.git"}
+        ]

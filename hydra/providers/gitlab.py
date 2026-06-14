@@ -86,6 +86,22 @@ class GitLabProvider:
             namespace_path=namespace.full_path,
         )
 
+    def delete_repo(self, *, token: str, project_id: int) -> None:
+        gitlab_api.delete_project(
+            host=self.spec.id,
+            base_url=self.spec.url,
+            token=token,
+            project_id=project_id,
+        )
+
+    def delete_namespace(self, *, token: str, group_path: str) -> None:
+        gitlab_api.delete_group(
+            host=self.spec.id,
+            base_url=self.spec.url,
+            token=token,
+            group_path=group_path,
+        )
+
     def add_outbound_mirror(
         self,
         *,
