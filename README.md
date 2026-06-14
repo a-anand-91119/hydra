@@ -97,7 +97,7 @@ When you mint personal access tokens, use these scopes:
 | ---- | -------------- | --------------- |
 | Self-hosted GitLab | `api` | `<your-host>/-/user_settings/personal_access_tokens` |
 | GitLab.com         | `api` | https://gitlab.com/-/user_settings/personal_access_tokens |
-| GitHub             | `repo` (plus `admin:org` if creating under an organisation) | https://github.com/settings/tokens |
+| GitHub             | `repo` (plus `admin:org` if creating under an organisation). To delete GitHub repos with `hydra destroy`, also grant `delete_repo` for classic PATs or `Administration: Read and write` for fine-grained PATs. | https://github.com/settings/tokens |
 
 ### Token resolution order
 
@@ -161,6 +161,37 @@ before any provider call. `--yes` skips the prompt.
 
 ---
 
+## Destroying repos
+
+```sh
+# Preview the repo/fork cleanup plan, then confirm
+hydra destroy my-repo
+
+# Skip the confirmation prompt
+hydra destroy my-repo --yes
+
+# Also delete inferred GitLab groups/namespaces after repos are deleted
+hydra destroy my-repo --delete-group
+```
+
+`hydra destroy <name>` reads the local journal, deletes fork repos first, then
+the primary repo, and removes the journal row after successful cleanup. If the
+journal is incomplete because an earlier `hydra create` failed before mirror
+setup, Hydra probes configured fork hosts for orphaned repos by name and includes
+anything it finds in the plan.
+
+Group deletion is deliberately opt-in. `--delete-group` (alias:
+`--delete-namespace`) infers GitLab namespaces from repo URLs and deletes those
+namespaces after repo deletion. Use it only for groups Hydra created or groups
+you know are safe to remove.
+
+GitLab project deletion is asynchronous. If a retry sees that GitLab has already
+marked a project for deletion, Hydra treats that as success and continues. If a
+delete fails because of permissions, the journal row is preserved so you can fix
+the token and rerun the same command.
+
+---
+
 ## Inspecting mirrors
 
 ```sh
@@ -177,6 +208,7 @@ Shows per-mirror last status and last error inline for one repo, straight from t
 | Command | Description |
 | ------- | ----------- |
 | `hydra create [name]` | Create the repo across all three hosts. Without `name`, runs the wizard. Renders a plan + prompts before applying (skip with `--yes`). |
+| `hydra destroy <name>`| Delete a journaled repo and its forks. Probes for orphaned forks, deletes forks before the primary, and can also remove inferred GitLab groups with `--delete-group`. |
 | `hydra configure`     | Onboarding wizard — config + tokens. |
 | `hydra status <name>` | Per-mirror health for one repo from the journal (offline). `--refresh` re-queries the primary first. Exits non-zero if any mirror is unhealthy. |
 | `hydra list`          | List journaled repos and last-known mirror status. `--refresh` re-queries the primary (uses `--max-workers`, default 8). |
@@ -203,16 +235,21 @@ Hydra translates HTTP failures into actionable messages:
   and re-run `hydra configure`, or set HYDRA_GITLAB_TOKEN in your environment.
 ```
 
-If a failure happens **after** some resources have been created, the partial state is reported so you can clean up before retrying:
+If a failure happens **after** some resources have been created, the partial state is reported and Hydra offers to roll those resources back immediately:
 
 ```
 ⚠ Partial progress before the failure:
   • self-hosted GitLab repo: https://gitlab.example.com/sandbox/demo
   • gitlab.com group: https://gitlab.com/repo-syncer-managed-groups/sandbox-20260508131245
 
-  These resources exist now. Delete them manually before retrying,
-  or use a different repo name.
+  These resources exist now.
+
+  Roll back the created resources? [y/N]:
 ```
+
+If you decline rollback or the process is interrupted, rerun cleanup later with
+`hydra destroy <name>`. Add `--delete-group` if Hydra created GitLab groups that
+should be removed too.
 
 ---
 

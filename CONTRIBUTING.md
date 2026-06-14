@@ -23,14 +23,16 @@ If all four green, you're set up.
 
 ```
 hydra/                  # the package
-├── cli.py              # Typer commands (create, configure, status, config-path)
+├── cli/                # Typer command modules and shared CLI helpers
 ├── wizard.py           # interactive Questionary wizards
 ├── config.py           # YAML config loader (~/.config/hydra/config.yaml)
 ├── secrets.py          # token resolver: keyring → env → .env → prompt
 ├── errors.py           # HydraAPIError + raise_for_response (HTTP→message)
 ├── gitlab.py           # GitLab project + group API
-├── github.py           # GitHub repo creation API
+├── github.py           # GitHub repo API
 ├── mirrors.py          # remote-mirror setup on the self-hosted GitLab
+├── providers/          # provider abstraction over GitLab/GitHub operations
+├── journal.py          # SQLite journal for created repos and mirrors
 └── utils.py            # small pure helpers (slug)
 
 tests/                  # pytest suite — pure functions only, no network
@@ -42,11 +44,12 @@ pyproject.toml          # deps, ruff, pytest, coverage config
 
 | If you're adding... | Put it in... |
 | --- | --- |
-| A new CLI command or flag                 | `hydra/cli.py` (and a wizard step in `wizard.py` if interactive) |
+| A new CLI command or flag                 | `hydra/cli/<command>.py` (and a wizard step in `wizard.py` if interactive) |
 | New HTTP API call                          | the matching `gitlab.py` / `github.py` / `mirrors.py` |
 | New host-error mapping (e.g. 429, 451)     | `hydra/errors.py:raise_for_response` |
 | Config key                                 | `hydra/config.py` (also update `config.yaml.example`) |
 | Pure helper                                | `hydra/utils.py` |
+| Provider-specific behavior                 | `hydra/providers/<provider>.py` plus focused provider tests |
 
 API modules **must** route every response through `raise_for_response(...)` — never inline-raise a generic exception. Pass `host=` so the error message names the right service, and `host_url=` so the rotation hint can render the real URL.
 
@@ -65,7 +68,7 @@ CI runs the same commands. If `ruff check` is clean and `pytest` is green locall
 ## Code style
 
 - **Formatter is authoritative.** Don't argue with ruff format. Run it before committing.
-- **Type hints everywhere.** `from __future__ import annotations` is at the top of every module so you can use `X | None` freely — **except** in `hydra/cli.py`, where Typer evaluates annotations at runtime via `get_type_hints()`. Stick to `Optional[X]` there.
+- **Type hints everywhere.** `from __future__ import annotations` is at the top of every module so you can use `X | None` freely — **except** in `hydra/cli/*.py`, where Typer evaluates annotations at runtime via `get_type_hints()`. Stick to `Optional[X]` there.
 - **Comments are rare.** Default to none. Only write a comment when the *why* isn't obvious from the code (a hidden invariant, a workaround, a tricky edge case).
 - **No print().** Use Rich's `Console` for user-facing output; route errors through `_render_api_error` in `cli.py`.
 - **No mutable module-level state.** Token caches, console singletons, etc. should be created per-command.
@@ -85,7 +88,6 @@ def test_404_returns_not_found(fake_response):
 Coverage floor is 30% (set in `pyproject.toml`). New code that adds executable lines without tests will lower coverage; don't ship below the floor.
 
 What we don't test (yet):
-- Live `cli.py` command flows — Typer's `CliRunner` works but no tests exist yet, contributions welcome.
 - Wizard rendering — would need a Questionary-aware harness.
 
 ## Commit messages
