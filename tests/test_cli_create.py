@@ -322,7 +322,7 @@ class TestPreflight:
     """Phase 7: pre-mutation token-scope check."""
 
     def test_create_bails_when_primary_token_lacks_api_scope(self, cfg, opts, console, patches):
-        import click
+        import typer
 
         from hydra import cli as cli_mod_local
         from hydra import preflight
@@ -341,7 +341,7 @@ class TestPreflight:
         with (
             patch("hydra.cli.preflight_mod.check_tokens", return_value=bad),
             patch.object(cli_mod_local, "executor") as exec_mod,
-            pytest.raises(click.exceptions.Exit) as excinfo,
+            pytest.raises(typer.Exit) as excinfo,
         ):
             _execute_create(cfg=cfg, opts=opts, verbose=False, console=console)
         assert excinfo.value.exit_code == 1
